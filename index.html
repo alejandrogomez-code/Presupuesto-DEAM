@@ -270,9 +270,9 @@ const sb = configured ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) :
 /* ---------------- Helpers ---------------- */
 const money = (n) =>
   (n == null || isNaN(n)) ? "—" :
-  new Intl.NumberFormat("es-AR", { style:"currency", currency:"ARS", maximumFractionDigits:0 }).format(n);
+  new Intl.NumberFormat("es-AR", { style:"currency", currency:"ARS", minimumFractionDigits:2, maximumFractionDigits:2 }).format(n);
 const pct = (n) => (n == null || isNaN(n) || !isFinite(n)) ? "—" :
-  new Intl.NumberFormat("es-AR", { maximumFractionDigits:1 }).format(n) + "%";
+  new Intl.NumberFormat("es-AR", { minimumFractionDigits:2, maximumFractionDigits:2 }).format(n) + "%";
 const TYPE_COLOR = { ingreso:"var(--t-ingreso)", egreso:"var(--t-egreso)", impuesto:"var(--t-impuesto)", resultado:"var(--t-resultado)" };
 // ¿Un aumento es favorable? ingreso/resultado -> sí (verde). egreso/impuesto -> no (rojo)
 const goodIfUp = (type) => type === "ingreso" || type === "resultado";
