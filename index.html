@@ -177,7 +177,7 @@
   .grid-sub-row .sticky-col{background:var(--surface)}
   .sub-name{color:var(--muted);font-weight:500;padding-left:6px}
   .cat-total{font-weight:700}
-  input.cell{width:96px;border:1px solid transparent;border-radius:6px;padding:6px 7px;text-align:right;
+  input.cell{width:118px;border:1px solid transparent;border-radius:6px;padding:6px 7px;text-align:right;
     font-size:12.5px;font-variant-numeric:tabular-nums;background:transparent}
   input.cell:hover:not(:disabled){border-color:var(--line)}
   input.cell:focus{outline:none;border-color:var(--teal);background:#fff;box-shadow:0 0 0 2px rgba(13,122,114,.13)}
@@ -276,6 +276,23 @@ const pct = (n) => (n == null || isNaN(n) || !isFinite(n)) ? "—" :
 const TYPE_COLOR = { ingreso:"var(--t-ingreso)", egreso:"var(--t-egreso)", impuesto:"var(--t-impuesto)", resultado:"var(--t-resultado)" };
 // ¿Un aumento es favorable? ingreso/resultado -> sí (verde). egreso/impuesto -> no (rojo)
 const goodIfUp = (type) => type === "ingreso" || type === "resultado";
+
+/* Input con formato: muestra $/% cuando no está enfocado, número crudo al editar.
+   El valor que sube por onChange siempre es un string numérico plano (punto decimal). */
+function FmtInput({ value, onChange, kind="money", disabled, placeholder, className }){
+  const [focused, setFocused] = useState(false);
+  const num = parseFloat(value);
+  let display;
+  if(focused) display = value ?? "";
+  else if(value==="" || value==null || isNaN(num)) display = "";
+  else display = kind==="pct" ? pct(num) : money(num);
+  return (
+    <input className={className} type="text" inputMode="decimal" disabled={disabled}
+      placeholder={placeholder} value={display}
+      onFocus={()=>setFocused(true)} onBlur={()=>setFocused(false)}
+      onChange={e=> onChange(e.target.value.replace(/[^\d.,\-]/g,"").replace(",","."))} />
+  );
+}
 
 /* ============================================================
    2) LOGIN
@@ -653,20 +670,19 @@ function ReferenceView({ categories, fiscalYearId, refName, referenceValues, can
                     </div>
                   </td>
                   <td className="num">
-                    <input className="cell num wide" type="number" inputMode="decimal" placeholder="0"
-                      disabled={!canEdit} value={data[c.id].accumulated}
-                      onChange={e=>setField(c.id,"accumulated",e.target.value)}
-                      onBlur={()=>{ if(data[c.id].average==="") fillAvg(c.id); }} />
+                    <FmtInput className="cell num wide" kind="money" disabled={!canEdit}
+                      value={data[c.id].accumulated} placeholder="$ 0,00"
+                      onChange={v=>setField(c.id,"accumulated",v)} />
                   </td>
                   <td className="num">
-                    <input className="cell num wide" type="number" inputMode="decimal" placeholder="0"
-                      disabled={!canEdit} value={data[c.id].average}
-                      onChange={e=>setField(c.id,"average",e.target.value)} />
+                    <FmtInput className="cell num wide" kind="money" disabled={!canEdit}
+                      value={data[c.id].average} placeholder="$ 0,00"
+                      onChange={v=>setField(c.id,"average",v)} />
                   </td>
                   <td className="num">
-                    <input className="cell num" type="number" inputMode="decimal" placeholder="%"
-                      disabled={!canEdit} value={data[c.id].pct_sales}
-                      onChange={e=>setField(c.id,"pct_sales",e.target.value)} />
+                    <FmtInput className="cell num" kind="pct" disabled={!canEdit}
+                      value={data[c.id].pct_sales} placeholder="0,00%"
+                      onChange={v=>setField(c.id,"pct_sales",v)} />
                   </td>
                 </tr>
               ))}
@@ -675,7 +691,7 @@ function ReferenceView({ categories, fiscalYearId, refName, referenceValues, can
         </div>
       </div>
       <p style={{fontSize:12,color:"var(--muted)",marginTop:10}}>
-        Tip: al completar el acumulado, el promedio se sugiere solo (acumulado ÷ 12). Podés sobrescribirlo.
+        Los importes se muestran en pesos al salir del campo; al hacer clic ves el número para editarlo.
       </p>
     </div>
   );
@@ -826,10 +842,9 @@ function GridView({ categories, subcategories, months, values, currentFyId, fisc
                         <td key={m.id} className="num">
                           {hasSubs
                             ? <span className="cat-total">{money(catTotal(cat.id,m.id))}</span>
-                            : <input className="cell num" type="number" inputMode="decimal"
-                                placeholder="0" disabled={!canEditValues}
-                                value={cells[keyOf(m.id,cat.id,"")]??""}
-                                onChange={e=>setCell(keyOf(m.id,cat.id,""),e.target.value)} />}
+                            : <FmtInput className="cell num" kind="money" disabled={!canEditValues}
+                                placeholder="$ 0,00" value={cells[keyOf(m.id,cat.id,"")]??""}
+                                onChange={v=>setCell(keyOf(m.id,cat.id,""),v)} />}
                         </td>
                       ))}
                       <td className="num grid-sum">{money(catAccumG(cat.id))}</td>
@@ -841,10 +856,9 @@ function GridView({ categories, subcategories, months, values, currentFyId, fisc
                         <td className="left sticky-col"><span className="sub-name">↳ {s.name}</span></td>
                         {monthsCur.map(m=>(
                           <td key={m.id} className="num">
-                            <input className="cell num" type="number" inputMode="decimal"
-                              placeholder="0" disabled={!canEditValues}
-                              value={cells[keyOf(m.id,cat.id,s.id)]??""}
-                              onChange={e=>setCell(keyOf(m.id,cat.id,s.id),e.target.value)} />
+                            <FmtInput className="cell num" kind="money" disabled={!canEditValues}
+                              placeholder="$ 0,00" value={cells[keyOf(m.id,cat.id,s.id)]??""}
+                              onChange={v=>setCell(keyOf(m.id,cat.id,s.id),v)} />
                           </td>
                         ))}
                         <td className="num grid-sum">{money(subAccum(cat.id,s.id))}</td>
