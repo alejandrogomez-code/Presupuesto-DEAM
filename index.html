@@ -196,6 +196,42 @@
     padding:7px 0;border-bottom:1px solid #f1f5f9;font-size:13.5px;font-weight:500}
   .cfg-form{display:flex;flex-direction:column;gap:8px;margin-top:6px}
   .cfg-check{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--muted);font-weight:600}
+
+  /* ---- Home estilo Odoo ---- */
+  .home{padding:14px 4px}
+  .home-title{font-size:26px;font-weight:800;letter-spacing:-.5px;margin:6px 0 2px;text-transform:capitalize}
+  .home-sub{color:var(--muted);font-size:14px;margin:0 0 22px}
+  .tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}
+  .tile{text-align:left;background:var(--surface);border:1px solid var(--line);border-radius:14px;
+    padding:20px;box-shadow:var(--shadow);cursor:pointer;transition:transform .12s,box-shadow .12s;
+    border-top:3px solid var(--tc,var(--navy))}
+  .tile:hover{transform:translateY(-2px);box-shadow:0 10px 30px rgba(16,30,54,.12)}
+  .tile-ico{width:46px;height:46px;border-radius:11px;display:grid;place-items:center;font-size:22px;
+    background:color-mix(in srgb, var(--tc) 14%, white);margin-bottom:14px}
+  .tile-name{font-size:17px;font-weight:800;letter-spacing:-.3px;margin-bottom:5px}
+  .tile-desc{font-size:13px;color:var(--muted);line-height:1.45}
+
+  /* ---- Section header ---- */
+  .section-head{display:flex;align-items:center;gap:16px;margin:4px 0 18px}
+  .back-btn{border:1px solid var(--line);background:var(--surface);border-radius:9px;padding:9px 13px;
+    font-size:13.5px;font-weight:600;color:var(--navy)}
+  .back-btn:hover{background:#f1f5f9;border-color:#cdd6e2}
+  .section-title{font-size:21px;font-weight:800;letter-spacing:-.4px;margin:0}
+  .section-sub{font-size:13px;color:var(--muted);margin:2px 0 0}
+
+  /* ---- Grid summary cols ---- */
+  .grid-table th.grid-sum,.grid-table td.grid-sum{background:#f4f7fb;font-weight:700;border-left:1px solid var(--line)}
+  .grid-table thead th.grid-sum{background:#eef3f9}
+  input.cell.wide{width:130px}
+
+  /* ---- Users table ---- */
+  .cfg-wide{grid-column:1 / -1}
+  .users-table{width:100%;border-collapse:collapse;font-size:13.5px}
+  .users-table th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);
+    padding:8px 6px;border-bottom:1px solid var(--line)}
+  .users-table td{padding:8px 6px;border-bottom:1px solid #f1f5f9}
+  .users-table td.left{font-weight:600}
+  .users-table select{padding:7px 30px 7px 10px;min-width:160px}
   .loading{min-height:100vh;display:grid;place-items:center;color:var(--muted);font-weight:600}
   .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;
     padding:11px 18px;border-radius:10px;font-size:13.5px;font-weight:600;z-index:80;box-shadow:0 10px 30px rgba(0,0,0,.3)}
@@ -547,6 +583,105 @@ function ReferenceModal({ categories, fiscalYearId, refName, referenceValues, on
 }
 
 /* ============================================================
+   3b-2) REFERENCIA como página (sección 2025/2026)
+   ============================================================ */
+function ReferenceView({ categories, fiscalYearId, refName, referenceValues, canEdit, reload, notify, onBack }){
+  const init = {};
+  categories.forEach(c=>{
+    const v = referenceValues.find(r=>r.category_id===c.id);
+    init[c.id] = {
+      accumulated: v && v.accumulated!=null ? String(v.accumulated) : "",
+      average:     v && v.average!=null     ? String(v.average)     : "",
+      pct_sales:   v && v.pct_sales!=null    ? String(v.pct_sales)   : "",
+    };
+  });
+  const [data, setData] = useState(init);
+  const [busy, setBusy] = useState(false);
+  const setField = (catId, key, val)=> setData(d=>({ ...d, [catId]:{ ...d[catId], [key]:val } }));
+  const fillAvg = (catId)=>{ const a=parseFloat(data[catId].accumulated); if(!isNaN(a)) setField(catId,"average",String(+(a/12).toFixed(2))); };
+
+  const save = async ()=>{
+    setBusy(true);
+    const rows=[];
+    categories.forEach(c=>{
+      const d=data[c.id];
+      const any = d.accumulated!=="" || d.average!=="" || d.pct_sales!=="";
+      if(any){
+        const acc=parseFloat(d.accumulated), avg=parseFloat(d.average), p=parseFloat(d.pct_sales);
+        rows.push({ fiscal_year_id:fiscalYearId, category_id:c.id,
+          accumulated:isNaN(acc)?0:acc, average:isNaN(avg)?0:avg, pct_sales:isNaN(p)?null:p });
+      }
+    });
+    if(rows.length){
+      const { error } = await sb.from("reference_values").upsert(rows,{ onConflict:"fiscal_year_id,category_id" });
+      if(error){ notify("Error al guardar la referencia."); setBusy(false); return; }
+    }
+    setBusy(false); notify("Referencia guardada."); reload();
+  };
+
+  return (
+    <div>
+      <div className="section-head">
+        <button className="back-btn" onClick={onBack}>← Inicio</button>
+        <div>
+          <h1 className="section-title">Referencia · {refName}</h1>
+          <p className="section-sub">Valores fijos por categoría: acumulado total, promedio y % sobre ventas. Se usan como referencia en la comparación.</p>
+        </div>
+        {canEdit &&
+          <button className="btn btn-teal" style={{marginLeft:"auto"}} onClick={save} disabled={busy}>
+            {busy?"Guardando…":"Guardar referencia"}</button>}
+      </div>
+
+      <div className="panel">
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th className="left">Categoría</th>
+                <th>Acumulado total</th>
+                <th>Promedio</th>
+                <th>% s/ventas</th>
+              </tr>
+            </thead>
+            <tbody>
+              {categories.map(c=>(
+                <tr key={c.id} className={c.is_calculated?"calc":""}>
+                  <td className="left">
+                    <div className="cat-cell">
+                      <span className="type-bar" style={{background:TYPE_COLOR[c.type]}}></span>
+                      <span className={"cat-name"+(c.is_calculated?" strong":"")}>{c.name}</span>
+                    </div>
+                  </td>
+                  <td className="num">
+                    <input className="cell num wide" type="number" inputMode="decimal" placeholder="0"
+                      disabled={!canEdit} value={data[c.id].accumulated}
+                      onChange={e=>setField(c.id,"accumulated",e.target.value)}
+                      onBlur={()=>{ if(data[c.id].average==="") fillAvg(c.id); }} />
+                  </td>
+                  <td className="num">
+                    <input className="cell num wide" type="number" inputMode="decimal" placeholder="0"
+                      disabled={!canEdit} value={data[c.id].average}
+                      onChange={e=>setField(c.id,"average",e.target.value)} />
+                  </td>
+                  <td className="num">
+                    <input className="cell num" type="number" inputMode="decimal" placeholder="%"
+                      disabled={!canEdit} value={data[c.id].pct_sales}
+                      onChange={e=>setField(c.id,"pct_sales",e.target.value)} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p style={{fontSize:12,color:"var(--muted)",marginTop:10}}>
+        Tip: al completar el acumulado, el promedio se sugiere solo (acumulado ÷ 12). Podés sobrescribirlo.
+      </p>
+    </div>
+  );
+}
+
+/* ============================================================
    3c) CARGA MENSUAL · grilla estilo Excel (meses = columnas)
    ============================================================ */
 function GridView({ categories, subcategories, months, values, currentFyId, fiscalYears,
@@ -630,6 +765,16 @@ function GridView({ categories, subcategories, months, values, currentFyId, fisc
 
   const fyName = fiscalYears.find(f=>f.id===currentFyId)?.name || "";
 
+  // Columnas de resumen (calculadas en vivo desde las celdas)
+  const ventasId = categories.find(c=>c.name==="Total de Ventas")?.id;
+  const subAccum = (cId,sId)=>{ let t=0; monthsCur.forEach(m=>{const v=parseFloat(cells[keyOf(m.id,cId,sId)]); if(!isNaN(v)) t+=v;}); return t; };
+  const catAccumG = (cId)=>{ let t=0; monthsCur.forEach(m=> t+=catTotal(cId,m.id)); return t; };
+  const catMonthsLoaded = (cId)=> monthsCur.filter(m=>{
+    if(catSubs(cId).some(s=>{const v=cells[keyOf(m.id,cId,s.id)]; return v!=null && v!=="";})) return true;
+    const d=cells[keyOf(m.id,cId,"")]; return d!=null && d!=="";
+  }).length;
+  const ventasAccumG = ventasId ? catAccumG(ventasId) : 0;
+
   return (
     <div>
       <div className="controls">
@@ -648,7 +793,7 @@ function GridView({ categories, subcategories, months, values, currentFyId, fisc
       <div className="panel">
         <div className="panel-head">
           <h2>Carga mensual · {fyName}</h2>
-          <span className="hint">Cargá cada mes como en una planilla. El total de cada categoría suma sus subcategorías.</span>
+          <span className="hint">Cargá cada mes como en una planilla. A la derecha: acumulado, promedio y % sobre ventas.</span>
         </div>
         <div className="table-scroll">
           <table className="grid-table">
@@ -656,6 +801,9 @@ function GridView({ categories, subcategories, months, values, currentFyId, fisc
               <tr>
                 <th className="left sticky-col">Categoría / Subcategoría</th>
                 {monthsCur.map(m=><th key={m.id}>{m.month_name.slice(0,3)} {String(m.calendar_year).slice(2)}</th>)}
+                <th className="grid-sum">Acum. total</th>
+                <th className="grid-sum">Promedio</th>
+                <th className="grid-sum">% s/ventas</th>
               </tr>
             </thead>
             <tbody>
@@ -684,6 +832,9 @@ function GridView({ categories, subcategories, months, values, currentFyId, fisc
                                 onChange={e=>setCell(keyOf(m.id,cat.id,""),e.target.value)} />}
                         </td>
                       ))}
+                      <td className="num grid-sum">{money(catAccumG(cat.id))}</td>
+                      <td className="num grid-sum">{money(catMonthsLoaded(cat.id)>0?catAccumG(cat.id)/catMonthsLoaded(cat.id):0)}</td>
+                      <td className="num grid-sum pct">{pct(ventasAccumG!==0?(catAccumG(cat.id)/ventasAccumG)*100:null)}</td>
                     </tr>
                     {subs.map(s=>(
                       <tr className="grid-sub-row" key={s.id}>
@@ -696,6 +847,9 @@ function GridView({ categories, subcategories, months, values, currentFyId, fisc
                               onChange={e=>setCell(keyOf(m.id,cat.id,s.id),e.target.value)} />
                           </td>
                         ))}
+                        <td className="num grid-sum">{money(subAccum(cat.id,s.id))}</td>
+                        <td className="num grid-sum"></td>
+                        <td className="num grid-sum"></td>
                       </tr>
                     ))}
                   </React.Fragment>
@@ -712,11 +866,18 @@ function GridView({ categories, subcategories, months, values, currentFyId, fisc
 /* ============================================================
    3d) CONFIGURACIÓN · ejercicios, categorías, subcategorías, referencia
    ============================================================ */
-function ConfigView({ categories, subcategories, fiscalYears, refFyId, reload, notify, onOpenReference }){
+function ConfigView({ categories, subcategories, fiscalYears, profiles, myEmail, reload, notify, onGoReference, onBack }){
   const [newCat, setNewCat] = useState({ name:"", type:"egreso" });
   const [newFy, setNewFy]   = useState({ name:"", start_year:"", is_reference:false });
   const [pickedCat, setPickedCat] = useState(categories[0]?.id || "");
   const [newSubName, setNewSubName] = useState("");
+
+  /* --- Usuarios / permisos --- */
+  const updateRole = async (p, role)=>{
+    const { error } = await sb.from("profiles").update({ role }).eq("id", p.id);
+    if(error){ notify("No se pudo cambiar el permiso."); return; }
+    notify(`Permiso de ${p.email||"usuario"} → ${role}.`); reload();
+  };
 
   /* --- Categorías --- */
   const addCategory = async ()=>{
@@ -758,7 +919,6 @@ function ConfigView({ categories, subcategories, fiscalYears, refFyId, reload, n
       .insert({ name:newFy.name.trim(), start_month:4, start_year:sy, end_month:3, end_year:sy+1,
                 is_reference:newFy.is_reference }).select().single();
     if(error){ notify("No se pudo crear el ejercicio."); return; }
-    // crear 12 meses (abril->marzo)
     const rows=[];
     for(let o=1;o<=12;o++){
       const mnum = ((3+o-1)%12)+1;
@@ -769,80 +929,119 @@ function ConfigView({ categories, subcategories, fiscalYears, refFyId, reload, n
     setNewFy({ name:"", start_year:"", is_reference:false }); notify("Ejercicio creado con sus 12 meses."); reload();
   };
 
+  const roleLabel = { admin:"Administrador", carga:"Carga", consulta:"Consulta" };
+
   return (
-    <div className="config-cols">
-      {/* Ejercicios */}
-      <section className="cfg-card">
-        <h3>Ejercicios</h3>
-        <ul className="cfg-list">
-          {fiscalYears.map(f=>(
-            <li key={f.id}><span>{f.name}</span>
-              <span className="badge">{f.is_reference?"referencia":"actual"}</span></li>
-          ))}
-        </ul>
-        <div className="cfg-form">
-          <input className="input-base" placeholder="Nombre (ej: 2027/2028)" value={newFy.name}
-            onChange={e=>setNewFy({...newFy,name:e.target.value})} />
-          <input className="input-base" type="number" placeholder="Año inicio (ej: 2027)" value={newFy.start_year}
-            onChange={e=>setNewFy({...newFy,start_year:e.target.value})} />
-          <label className="cfg-check">
-            <input type="checkbox" checked={newFy.is_reference}
-              onChange={e=>setNewFy({...newFy,is_reference:e.target.checked})} /> Es referencia
-          </label>
-          <button className="btn btn-primary" onClick={addFiscalYear}>Crear ejercicio</button>
+    <div>
+      <div className="section-head">
+        <button className="back-btn" onClick={onBack}>← Inicio</button>
+        <div>
+          <h1 className="section-title">Configuración</h1>
+          <p className="section-sub">Usuarios y permisos, categorías, subcategorías, ejercicios y referencia.</p>
         </div>
-      </section>
+      </div>
 
-      {/* Categorías */}
-      <section className="cfg-card">
-        <h3>Categorías</h3>
-        <ul className="cfg-list scroll">
-          {categories.map(c=>(
-            <li key={c.id}>
-              <span><span className="type-bar" style={{background:TYPE_COLOR[c.type],display:"inline-block",verticalAlign:"middle",marginRight:7}}></span>{c.name}</span>
-              <button className="icon-btn" onClick={()=>delCategory(c)} title="Eliminar">🗑</button>
-            </li>
-          ))}
-        </ul>
-        <div className="cfg-form">
-          <input className="input-base" placeholder="Nueva categoría" value={newCat.name}
-            onChange={e=>setNewCat({...newCat,name:e.target.value})} />
-          <select className="input-base" value={newCat.type} onChange={e=>setNewCat({...newCat,type:e.target.value})}>
-            <option value="ingreso">Ingreso</option>
-            <option value="egreso">Egreso / gasto</option>
-            <option value="impuesto">Impuesto</option>
-            <option value="resultado">Resultado / calculada</option>
+      <div className="config-cols">
+        {/* Usuarios / permisos */}
+        <section className="cfg-card cfg-wide">
+          <h3>Usuarios y permisos</h3>
+          <table className="users-table">
+            <thead><tr><th className="left">Usuario</th><th>Permiso</th></tr></thead>
+            <tbody>
+              {profiles.length===0 && <tr><td colSpan="2" style={{color:"var(--muted)"}}>No hay usuarios todavía.</td></tr>}
+              {profiles.map(p=>(
+                <tr key={p.id}>
+                  <td className="left">{p.email||p.id}{p.email===myEmail && <span className="badge" style={{marginLeft:8}}>vos</span>}</td>
+                  <td>
+                    <select className="input-base" value={p.role||"consulta"}
+                      onChange={e=>updateRole(p,e.target.value)}>
+                      <option value="admin">Administrador</option>
+                      <option value="carga">Carga</option>
+                      <option value="consulta">Consulta</option>
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p style={{fontSize:12,color:"var(--muted)",marginTop:8}}>
+            El usuario debe haber iniciado sesión al menos una vez para aparecer acá. Administrador edita todo; Carga carga importes; Consulta solo lee.
+          </p>
+        </section>
+
+        {/* Referencia */}
+        <section className="cfg-card">
+          <h3>Referencia</h3>
+          <p style={{fontSize:13,color:"var(--muted)"}}>Cargar acumulado, promedio y % del ejercicio de referencia.</p>
+          <button className="btn btn-teal" onClick={onGoReference}>Abrir carga de referencia</button>
+        </section>
+
+        {/* Ejercicios */}
+        <section className="cfg-card">
+          <h3>Ejercicios</h3>
+          <ul className="cfg-list">
+            {fiscalYears.map(f=>(
+              <li key={f.id}><span>{f.name}</span>
+                <span className="badge">{f.is_reference?"referencia":"actual"}</span></li>
+            ))}
+          </ul>
+          <div className="cfg-form">
+            <input className="input-base" placeholder="Nombre (ej: 2027/2028)" value={newFy.name}
+              onChange={e=>setNewFy({...newFy,name:e.target.value})} />
+            <input className="input-base" type="number" placeholder="Año inicio (ej: 2027)" value={newFy.start_year}
+              onChange={e=>setNewFy({...newFy,start_year:e.target.value})} />
+            <label className="cfg-check">
+              <input type="checkbox" checked={newFy.is_reference}
+                onChange={e=>setNewFy({...newFy,is_reference:e.target.checked})} /> Es referencia
+            </label>
+            <button className="btn btn-primary" onClick={addFiscalYear}>Crear ejercicio</button>
+          </div>
+        </section>
+
+        {/* Categorías */}
+        <section className="cfg-card">
+          <h3>Categorías</h3>
+          <ul className="cfg-list scroll">
+            {categories.map(c=>(
+              <li key={c.id}>
+                <span><span className="type-bar" style={{background:TYPE_COLOR[c.type],display:"inline-block",verticalAlign:"middle",marginRight:7}}></span>{c.name}</span>
+                <button className="icon-btn" onClick={()=>delCategory(c)} title="Eliminar">🗑</button>
+              </li>
+            ))}
+          </ul>
+          <div className="cfg-form">
+            <input className="input-base" placeholder="Nueva categoría" value={newCat.name}
+              onChange={e=>setNewCat({...newCat,name:e.target.value})} />
+            <select className="input-base" value={newCat.type} onChange={e=>setNewCat({...newCat,type:e.target.value})}>
+              <option value="ingreso">Ingreso</option>
+              <option value="egreso">Egreso / gasto</option>
+              <option value="impuesto">Impuesto</option>
+              <option value="resultado">Resultado / calculada</option>
+            </select>
+            <button className="btn btn-primary" onClick={addCategory}>Agregar categoría</button>
+          </div>
+        </section>
+
+        {/* Subcategorías */}
+        <section className="cfg-card">
+          <h3>Subcategorías</h3>
+          <select className="input-base" value={pickedCat} onChange={e=>setPickedCat(e.target.value)}>
+            {categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
-          <button className="btn btn-primary" onClick={addCategory}>Agregar categoría</button>
-        </div>
-      </section>
-
-      {/* Subcategorías */}
-      <section className="cfg-card">
-        <h3>Subcategorías</h3>
-        <select className="input-base" value={pickedCat} onChange={e=>setPickedCat(e.target.value)}>
-          {categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-        <ul className="cfg-list scroll" style={{marginTop:10}}>
-          {subsOf.length===0 && <li style={{color:"var(--muted)"}}>Sin subcategorías</li>}
-          {subsOf.map(s=>(
-            <li key={s.id}><span>{s.name}</span>
-              <button className="icon-btn" onClick={()=>delSub(s)} title="Eliminar">🗑</button></li>
-          ))}
-        </ul>
-        <div className="cfg-form">
-          <input className="input-base" placeholder="Nueva subcategoría" value={newSubName}
-            onChange={e=>setNewSubName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addSub()} />
-          <button className="btn btn-primary" onClick={addSub}>Agregar subcategoría</button>
-        </div>
-      </section>
-
-      {/* Referencia */}
-      <section className="cfg-card">
-        <h3>Referencia (acumulado, promedio, %)</h3>
-        <p style={{fontSize:13,color:"var(--muted)"}}>Cargá los valores fijos del ejercicio de referencia por categoría.</p>
-        <button className="btn btn-teal" onClick={onOpenReference}>Editar referencia</button>
-      </section>
+          <ul className="cfg-list scroll" style={{marginTop:10}}>
+            {subsOf.length===0 && <li style={{color:"var(--muted)"}}>Sin subcategorías</li>}
+            {subsOf.map(s=>(
+              <li key={s.id}><span>{s.name}</span>
+                <button className="icon-btn" onClick={()=>delSub(s)} title="Eliminar">🗑</button></li>
+            ))}
+          </ul>
+          <div className="cfg-form">
+            <input className="input-base" placeholder="Nueva subcategoría" value={newSubName}
+              onChange={e=>setNewSubName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addSub()} />
+            <button className="btn btn-primary" onClick={addSub}>Agregar subcategoría</button>
+          </div>
+        </section>
+      </div>
     </div>
   );
 }
@@ -858,12 +1057,14 @@ function Dashboard({ session, role, onLogout }) {
   const [subcategories, setSubcategories] = useState([]);
   const [values, setValues]   = useState([]);
   const [referenceValues, setReferenceValues] = useState([]);
+  const [profiles, setProfiles] = useState([]);
   const [currentFyId, setCurrentFyId] = useState(null);
   const [refFyId, setRefFyId] = useState(null);
   const [order, setOrder]     = useState(1);
   const [openCat, setOpenCat] = useState(null);
   const [refEditor, setRefEditor] = useState(false);
-  const [view, setView]       = useState("dashboard");
+  const [view, setView]       = useState("home");
+  const [compareMode, setCompareMode] = useState("acum");
   const [toast, setToast]     = useState("");
 
   const canEditValues = role==="admin" || role==="carga";
@@ -872,17 +1073,18 @@ function Dashboard({ session, role, onLogout }) {
   const notify = (m)=>{ setToast(m); setTimeout(()=>setToast(""),2600); };
 
   const loadAll = useCallback(async () => {
-    const [fy, mo, cat, sub, val, ref] = await Promise.all([
+    const [fy, mo, cat, sub, val, ref, prof] = await Promise.all([
       sb.from("fiscal_years").select("*").order("start_year"),
       sb.from("months").select("*"),
       sb.from("categories").select("*").order("order_index"),
       sb.from("subcategories").select("*").eq("active",true).order("created_at"),
       sb.from("monthly_values").select("*"),
       sb.from("reference_values").select("*"),
+      sb.from("profiles").select("*").order("email"),
     ]);
     setFiscalYears(fy.data||[]); setMonths(mo.data||[]);
     setCategories(cat.data||[]); setSubcategories(sub.data||[]); setValues(val.data||[]);
-    setReferenceValues(ref.data||[]);
+    setReferenceValues(ref.data||[]); setProfiles(prof.data||[]);
 
     const cur = (fy.data||[]).find(f=>!f.is_reference);
     const ref2 = (fy.data||[]).find(f=>f.is_reference);
@@ -946,14 +1148,24 @@ function Dashboard({ session, role, onLogout }) {
     const refAcum = Number(ref.accumulated||0);
     const refProm = Number(ref.average||0);
     const refPct  = ref.pct_sales!=null ? Number(ref.pct_sales) : null;
-    const difAcum    = acum - refAcum;
-    const difAcumPct = refAcum!==0 ? (difAcum/Math.abs(refAcum))*100 : null;
-    return {
-      cat, mes, acum, prom, refAcum, refProm, refPct, difAcum, difAcumPct,
-      pctVtaMes:  ventasMonthCur!==0 ? (mes/ventasMonthCur)*100 : null,
-      pctVtaAcum: ventasAccumCur!==0 ? (acum/ventasAccumCur)*100 : null,
-    };
-  }), [categories, currentFyId, order, catMonth, catAccum, refMap, ventasMonthCur, ventasAccumCur]);
+    const pctVtaMes  = ventasMonthCur!==0 ? (mes/ventasMonthCur)*100 : null;
+    const pctVtaAcum = ventasAccumCur!==0 ? (acum/ventasAccumCur)*100 : null;
+
+    // Diferencias según el modo de comparación
+    let difVal=null, difPct=null, difIsPoints=false;
+    if(compareMode==="acum"){              // Acumulado actual vs Acum. referencia
+      difVal = acum - refAcum;
+      difPct = refAcum!==0 ? (difVal/Math.abs(refAcum))*100 : null;
+    } else if(compareMode==="mes"){        // Mes actual vs Promedio referencia
+      difVal = mes - refProm;
+      difPct = refProm!==0 ? (difVal/Math.abs(refProm))*100 : null;
+    } else if(compareMode==="pct"){        // % s/ventas acum actual vs % referencia (en puntos)
+      difIsPoints = true;
+      difVal = (pctVtaAcum!=null && refPct!=null) ? (pctVtaAcum - refPct) : null;
+    }
+    return { cat, mes, acum, prom, refAcum, refProm, refPct, pctVtaMes, pctVtaAcum,
+             difVal, difPct, difIsPoints };
+  }), [categories, currentFyId, order, catMonth, catAccum, refMap, ventasMonthCur, ventasAccumCur, compareMode]);
 
   const kpiFor = (name) => rows.find(r=>r.cat.name===name) || {};
   const kpiVentas = kpiFor("Total de Ventas");
@@ -978,8 +1190,8 @@ function Dashboard({ session, role, onLogout }) {
       "Acum. referencia": r.refAcum,
       "Prom. referencia": r.refProm,
       "% referencia": r.refPct,
-      "Diferencia $ (acum)": r.difAcum,
-      "Diferencia % (acum)": r.difAcumPct!=null? +r.difAcumPct.toFixed(1):null,
+      "Diferencia $ (acum)": r.acum - r.refAcum,
+      "Diferencia % (acum)": r.refAcum!==0 ? +(((r.acum-r.refAcum)/Math.abs(r.refAcum))*100).toFixed(1) : null,
     }));
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
@@ -994,7 +1206,7 @@ function Dashboard({ session, role, onLogout }) {
   return (
     <>
       <div className="topbar">
-        <div className="brand">
+        <div className="brand" style={{cursor:"pointer"}} onClick={()=>setView("home")}>
           <div className="logo">DM</div>
           <div>
             <div className="name">DEAM SRL</div>
@@ -1002,8 +1214,10 @@ function Dashboard({ session, role, onLogout }) {
           </div>
         </div>
         <nav className="topnav">
-          <button className={"nav-item"+(view==="dashboard"?" active":"")} onClick={()=>setView("dashboard")}>Comparativo</button>
-          <button className={"nav-item"+(view==="grid"?" active":"")} onClick={()=>setView("grid")}>Carga mensual</button>
+          <button className={"nav-item"+(view==="home"?" active":"")} onClick={()=>setView("home")}>Inicio</button>
+          <button className={"nav-item"+(view==="ref"?" active":"")} onClick={()=>setView("ref")}>{refName}</button>
+          <button className={"nav-item"+(view==="grid"?" active":"")} onClick={()=>setView("grid")}>{fyName}</button>
+          <button className={"nav-item"+(view==="compare"?" active":"")} onClick={()=>setView("compare")}>Comparación</button>
           {role==="admin" &&
             <button className={"nav-item"+(view==="config"?" active":"")} onClick={()=>setView("config")}>Configuración</button>}
         </nav>
@@ -1015,7 +1229,48 @@ function Dashboard({ session, role, onLogout }) {
       </div>
 
       <div className="container">
-       {view==="dashboard" && <>
+       {view==="home" &&
+        <div className="home">
+          <h1 className="home-title">Hola{session.user.email?`, ${session.user.email.split("@")[0]}`:""}</h1>
+          <p className="home-sub">Elegí una sección para empezar.</p>
+          <div className="tiles">
+            <button className="tile" style={{"--tc":"var(--t-resultado)"}} onClick={()=>setView("ref")}>
+              <div className="tile-ico">📌</div>
+              <div className="tile-name">{refName || "Referencia"}</div>
+              <div className="tile-desc">Cargar referencia: acumulado, promedio y % sobre ventas.</div>
+            </button>
+            <button className="tile" style={{"--tc":"var(--teal)"}} onClick={()=>setView("grid")}>
+              <div className="tile-ico">📅</div>
+              <div className="tile-name">{fyName || "Ejercicio actual"}</div>
+              <div className="tile-desc">Cargar mes a mes. Acumulado, promedio y % al final.</div>
+            </button>
+            <button className="tile" style={{"--tc":"#2563eb"}} onClick={()=>setView("compare")}>
+              <div className="tile-ico">📊</div>
+              <div className="tile-name">Comparación</div>
+              <div className="tile-desc">Comparar mes, promedio o % contra otro ejercicio.</div>
+            </button>
+            {role==="admin" &&
+              <button className="tile" style={{"--tc":"#7c3aed"}} onClick={()=>setView("config")}>
+                <div className="tile-ico">⚙️</div>
+                <div className="tile-name">Configuración</div>
+                <div className="tile-desc">Usuarios y permisos, categorías, subcategorías y ejercicios.</div>
+              </button>}
+          </div>
+        </div>}
+
+       {view==="ref" &&
+        <ReferenceView categories={categories} fiscalYearId={refFyId} refName={refName}
+          referenceValues={referenceValues.filter(r=>r.fiscal_year_id===refFyId)}
+          canEdit={role==="admin"} reload={loadAll} notify={notify} onBack={()=>setView("home")} />}
+
+       {view==="compare" && <>
+        <div className="section-head">
+          <button className="back-btn" onClick={()=>setView("home")}>← Inicio</button>
+          <div>
+            <h1 className="section-title">Comparación</h1>
+            <p className="section-sub">Compará el mes, el promedio o el % del ejercicio actual contra la referencia.</p>
+          </div>
+        </div>
         {/* Controles */}
         <div className="controls">
           <div className="field">
@@ -1036,9 +1291,17 @@ function Dashboard({ session, role, onLogout }) {
               {monthsCur.map(m=><option key={m.id} value={m.order_index}>{m.month_name} {m.calendar_year}</option>)}
             </select>
           </div>
+          <div className="field">
+            <label>Comparar</label>
+            <select value={compareMode} onChange={e=>setCompareMode(e.target.value)}>
+              <option value="acum">Acumulado vs Acum. ref.</option>
+              <option value="mes">Mes actual vs Prom. ref.</option>
+              <option value="pct">% s/ventas vs % ref.</option>
+            </select>
+          </div>
           <div className="spacer"></div>
           {canEditSubs &&
-            <button className="btn" onClick={()=>setRefEditor(true)}>✎ Editar referencia {refName}</button>}
+            <button className="btn" onClick={()=>setView("ref")}>✎ Editar referencia {refName}</button>}
           <button className="btn btn-teal" onClick={exportXlsx}>⬇ Exportar a Excel</button>
         </div>
 
@@ -1073,15 +1336,15 @@ function Dashboard({ session, role, onLogout }) {
                   <th>Acum. ref.</th>
                   <th>Prom. ref.</th>
                   <th>% ref.</th>
-                  <th>Dif. $ (acum)</th>
-                  <th>Dif. % (acum)</th>
+                  <th>{compareMode==="acum"?"Dif. $ (acum)":compareMode==="mes"?"Dif. $ (mes vs prom)":"Dif. p.p. (%)"}</th>
+                  <th>{compareMode==="pct"?"":"Dif. %"}</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map(r=>{
-                  const fav = goodIfUp(r.cat.type) ? r.difAcum>=0 : r.difAcum<=0;
-                  const diffClass = r.difAcum===0 ? "" : (fav?"pos":"neg");
+                  const fav = goodIfUp(r.cat.type) ? (r.difVal??0)>=0 : (r.difVal??0)<=0;
+                  const diffClass = (r.difVal==null||r.difVal===0) ? "" : (fav?"pos":"neg");
                   return (
                     <tr key={r.cat.id} className={r.cat.is_calculated?"calc":""}>
                       <td className="left">
@@ -1099,8 +1362,16 @@ function Dashboard({ session, role, onLogout }) {
                       <td className="num">{money(r.refAcum)}</td>
                       <td className="num pct">{money(r.refProm)}</td>
                       <td className="num pct">{pct(r.refPct)}</td>
-                      <td className={"num diff "+diffClass}>{r.difAcum>0?"+":""}{money(r.difAcum)}</td>
-                      <td className={"num diff "+diffClass}>{r.difAcumPct!=null?(r.difAcumPct>0?"+":"")+pct(r.difAcumPct):"—"}</td>
+                      <td className={"num diff "+diffClass}>
+                        {r.difVal==null ? "—"
+                          : r.difIsPoints
+                            ? (r.difVal>0?"+":"")+pct(r.difVal)
+                            : (r.difVal>0?"+":"")+money(r.difVal)}
+                      </td>
+                      <td className={"num diff "+diffClass}>
+                        {compareMode==="pct" ? ""
+                          : (r.difPct!=null ? (r.difPct>0?"+":"")+pct(r.difPct) : "—")}
+                      </td>
                       <td>
                         <button className="link-btn" onClick={()=>setOpenCat(r.cat)}>
                           {canEditSubs?"Editar":"Ver"} detalle</button>
@@ -1118,12 +1389,12 @@ function Dashboard({ session, role, onLogout }) {
         <GridView categories={categories} subcategories={subcategories} months={months}
           values={values} currentFyId={currentFyId} fiscalYears={fiscalYears}
           setCurrentFyId={setCurrentFyId} canEditValues={canEditValues} canEditSubs={canEditSubs}
-          reload={loadAll} notify={notify} />}
+          reload={loadAll} notify={notify} onBack={()=>setView("home")} />}
 
        {view==="config" && role==="admin" &&
         <ConfigView categories={categories} subcategories={subcategories} fiscalYears={fiscalYears}
-          referenceValues={referenceValues} refFyId={refFyId}
-          reload={loadAll} notify={notify} onOpenReference={()=>setRefEditor(true)} />}
+          profiles={profiles} myEmail={session.user.email}
+          reload={loadAll} notify={notify} onGoReference={()=>setView("ref")} onBack={()=>setView("home")} />}
       </div>
 
       {openCat && curMonth &&
@@ -1139,17 +1410,6 @@ function Dashboard({ session, role, onLogout }) {
           canEditSubs={canEditSubs}
           onClose={()=>setOpenCat(null)}
           onSaved={()=>{ setOpenCat(null); loadAll(); }}
-          notify={notify}
-        />}
-
-      {refEditor &&
-        <ReferenceModal
-          categories={categories}
-          fiscalYearId={refFyId}
-          refName={refName}
-          referenceValues={referenceValues.filter(r=>r.fiscal_year_id===refFyId)}
-          onClose={()=>setRefEditor(false)}
-          onSaved={()=>{ setRefEditor(false); loadAll(); }}
           notify={notify}
         />}
 
