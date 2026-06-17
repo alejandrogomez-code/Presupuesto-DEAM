@@ -267,6 +267,9 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const configured = !SUPABASE_URL.includes("TU-PROYECTO") && !SUPABASE_ANON_KEY.includes("TU_ANON_KEY");
 const sb = configured ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
+// Mails que siempre se tratan como administradores en la interfaz
+const SUPERADMINS = ["alejandro.gomez@deam.com.ar"];
+
 /* ---------------- Helpers ---------------- */
 const money = (n) =>
   (n == null || isNaN(n)) ? "—" :
@@ -1467,6 +1470,7 @@ function App(){
 
   useEffect(()=>{
     if(session?.user){
+      if(SUPERADMINS.includes((session.user.email||"").toLowerCase())){ setRole("admin"); return; }
       sb.from("profiles").select("role").eq("id",session.user.id).single()
         .then(({data})=> setRole(data?.role || "consulta"));
     } else setRole(null);
