@@ -159,6 +159,43 @@
   .ref-cat{font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .ref-grid input.amount{width:100%;border:1px solid var(--line);border-radius:7px;padding:7px 9px;text-align:right;font-size:13px;font-variant-numeric:tabular-nums}
   .ref-grid input.amount:focus{outline:none;border-color:var(--teal);box-shadow:0 0 0 3px rgba(13,122,114,.13)}
+
+  /* ---- Top nav ---- */
+  .topnav{display:flex;gap:4px;margin-left:24px}
+  .nav-item{background:transparent;border:none;color:#a9c5da;font-size:13.5px;font-weight:600;
+    padding:8px 14px;border-radius:8px;border-bottom:2px solid transparent}
+  .nav-item:hover{background:rgba(255,255,255,.08);color:#fff}
+  .nav-item.active{color:#fff;background:rgba(255,255,255,.1)}
+
+  /* ---- Grid (carga mensual) ---- */
+  .grid-table{font-size:12.5px}
+  .grid-table th,.grid-table td{border-right:1px solid #eef2f7}
+  .grid-table .sticky-col{position:sticky;left:0;background:var(--surface);z-index:2;min-width:230px;box-shadow:1px 0 0 var(--line)}
+  .grid-table thead .sticky-col{z-index:3;background:#f6f8fb}
+  .grid-cat-row td{background:#fbfcfe;font-weight:600}
+  .grid-cat-row .sticky-col{background:#fbfcfe}
+  .grid-sub-row .sticky-col{background:var(--surface)}
+  .sub-name{color:var(--muted);font-weight:500;padding-left:6px}
+  .cat-total{font-weight:700}
+  input.cell{width:96px;border:1px solid transparent;border-radius:6px;padding:6px 7px;text-align:right;
+    font-size:12.5px;font-variant-numeric:tabular-nums;background:transparent}
+  input.cell:hover:not(:disabled){border-color:var(--line)}
+  input.cell:focus{outline:none;border-color:var(--teal);background:#fff;box-shadow:0 0 0 2px rgba(13,122,114,.13)}
+  .mini-add{margin-left:8px;border:1px dashed #cbd5e1;background:#fff;border-radius:6px;font-size:11px;
+    font-weight:600;color:var(--teal);padding:2px 7px}
+  .mini-add:hover{background:#f0fdfa;border-color:var(--teal)}
+
+  /* ---- Config ---- */
+  .config-cols{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+  .cfg-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:var(--shadow);padding:18px}
+  .cfg-card h3{margin:0 0 12px;font-size:15px;font-weight:700}
+  .cfg-list{list-style:none;margin:0 0 12px;padding:0}
+  .cfg-list.scroll{max-height:260px;overflow-y:auto}
+  .cfg-list li{display:flex;justify-content:space-between;align-items:center;gap:10px;
+    padding:7px 0;border-bottom:1px solid #f1f5f9;font-size:13.5px;font-weight:500}
+  .cfg-form{display:flex;flex-direction:column;gap:8px;margin-top:6px}
+  .cfg-check{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--muted);font-weight:600}
   .loading{min-height:100vh;display:grid;place-items:center;color:var(--muted);font-weight:600}
   .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;
     padding:11px 18px;border-radius:10px;font-size:13.5px;font-weight:600;z-index:80;box-shadow:0 10px 30px rgba(0,0,0,.3)}
@@ -286,7 +323,12 @@ function CategoryModal({ category, subs, monthId, fiscalYearId, monthName, fyNam
     if(!newSub.trim()) return;
     const { data, error } = await sb.from("subcategories")
       .insert({ category_id: category.id, name: newSub.trim() }).select().single();
-    if(error){ notify("No se pudo agregar la subcategoría."); return; }
+    if(error){
+      notify(/permission|policy|row-level/i.test(error.message||"")
+        ? "No se pudo agregar: tu usuario necesita rol 'admin'."
+        : "No se pudo agregar la subcategoría.");
+      return;
+    }
     setLocalSubs([...localSubs, data]); setAmounts({...amounts, [data.id]:""}); setNewSub("");
   };
 
@@ -505,6 +547,307 @@ function ReferenceModal({ categories, fiscalYearId, refName, referenceValues, on
 }
 
 /* ============================================================
+   3c) CARGA MENSUAL · grilla estilo Excel (meses = columnas)
+   ============================================================ */
+function GridView({ categories, subcategories, months, values, currentFyId, fiscalYears,
+                    setCurrentFyId, canEditValues, canEditSubs, reload, notify }){
+  const monthsCur = months.filter(m=>m.fiscal_year_id===currentFyId).sort((a,b)=>a.order_index-b.order_index);
+
+  // Clave de celda: monthId::catId::subId(''=directo)
+  const keyOf = (mId,cId,sId)=> `${mId}::${cId}::${sId||""}`;
+  const buildCells = useCallback(()=>{
+    const c={};
+    for(const v of values){
+      if(monthsCur.some(m=>m.id===v.month_id))
+        c[keyOf(v.month_id, v.category_id, v.subcategory_id)] = v.amount!=null?String(v.amount):"";
+    }
+    return c;
+  // eslint-disable-next-line
+  }, [values, currentFyId]);
+
+  const [cells, setCells] = useState(buildCells());
+  const [dirty, setDirty] = useState(()=>new Set());
+  const [busy, setBusy]   = useState(false);
+  const [subsLocal, setSubsLocal] = useState(subcategories);
+
+  useEffect(()=>{ setCells(buildCells()); setDirty(new Set()); }, [buildCells]);
+  useEffect(()=>{ setSubsLocal(subcategories); }, [subcategories]);
+
+  const setCell = (k,val)=>{
+    setCells(c=>({ ...c, [k]:val }));
+    setDirty(d=>{ const n=new Set(d); n.add(k); return n; });
+  };
+
+  const catSubs = (cId)=> subsLocal.filter(s=>s.category_id===cId);
+
+  // Total de una categoría en un mes (suma subcategorías + directo)
+  const catTotal = (cId, mId)=>{
+    let t=0;
+    catSubs(cId).forEach(s=>{ const v=parseFloat(cells[keyOf(mId,cId,s.id)]); if(!isNaN(v)) t+=v; });
+    const d=parseFloat(cells[keyOf(mId,cId,"")]); if(!isNaN(d)) t+=d;
+    return t;
+  };
+
+  const addSub = async (cat)=>{
+    const name = prompt(`Nueva subcategoría para "${cat.name}":`);
+    if(!name || !name.trim()) return;
+    const { data, error } = await sb.from("subcategories")
+      .insert({ category_id:cat.id, name:name.trim() }).select().single();
+    if(error){
+      notify(/permission|policy|row-level/i.test(error.message||"")
+        ? "Necesitás rol 'admin' para crear subcategorías." : "No se pudo crear la subcategoría.");
+      return;
+    }
+    setSubsLocal([...subsLocal, data]);
+  };
+
+  const save = async ()=>{
+    setBusy(true);
+    const ups=[], dels=[];
+    dirty.forEach(k=>{
+      const [mId,cId,sId] = k.split("::");
+      const raw = cells[k];
+      if(raw==="" || isNaN(parseFloat(raw))) dels.push({mId,cId,sId});
+      else ups.push({ fiscal_year_id:currentFyId, month_id:mId, category_id:cId,
+                      subcategory_id: sId||null, amount:parseFloat(raw) });
+    });
+    if(ups.length){
+      const { error } = await sb.from("monthly_values")
+        .upsert(ups, { onConflict:"month_id,category_id,subcategory_id" });
+      if(error){
+        notify(/permission|policy|row-level/i.test(error.message||"")
+          ? "Sin permiso para cargar (rol 'admin' o 'carga')." : "Error al guardar.");
+        setBusy(false); return;
+      }
+    }
+    for(const d of dels){
+      let q = sb.from("monthly_values").delete().eq("month_id",d.mId).eq("category_id",d.cId);
+      q = d.sId ? q.eq("subcategory_id",d.sId) : q.is("subcategory_id",null);
+      await q;
+    }
+    setBusy(false); notify("Carga guardada."); reload();
+  };
+
+  const fyName = fiscalYears.find(f=>f.id===currentFyId)?.name || "";
+
+  return (
+    <div>
+      <div className="controls">
+        <div className="field">
+          <label>Ejercicio a cargar</label>
+          <select value={currentFyId||""} onChange={e=>setCurrentFyId(e.target.value)}>
+            {fiscalYears.map(f=><option key={f.id} value={f.id}>{f.name}{f.is_reference?" (ref.)":""}</option>)}
+          </select>
+        </div>
+        <div className="spacer"></div>
+        {canEditValues &&
+          <button className="btn btn-teal" onClick={save} disabled={busy || dirty.size===0}>
+            {busy?"Guardando…":`Guardar cambios${dirty.size?` (${dirty.size})`:""}`}</button>}
+      </div>
+
+      <div className="panel">
+        <div className="panel-head">
+          <h2>Carga mensual · {fyName}</h2>
+          <span className="hint">Cargá cada mes como en una planilla. El total de cada categoría suma sus subcategorías.</span>
+        </div>
+        <div className="table-scroll">
+          <table className="grid-table">
+            <thead>
+              <tr>
+                <th className="left sticky-col">Categoría / Subcategoría</th>
+                {monthsCur.map(m=><th key={m.id}>{m.month_name.slice(0,3)} {String(m.calendar_year).slice(2)}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {categories.map(cat=>{
+                const subs = catSubs(cat.id);
+                const hasSubs = subs.length>0;
+                return (
+                  <React.Fragment key={cat.id}>
+                    <tr className="grid-cat-row">
+                      <td className="left sticky-col">
+                        <div className="cat-cell">
+                          <span className="type-bar" style={{background:TYPE_COLOR[cat.type]}}></span>
+                          <span className="cat-name">{cat.name}</span>
+                          {canEditSubs &&
+                            <button className="mini-add" title="Agregar subcategoría"
+                              onClick={()=>addSub(cat)}>+ sub</button>}
+                        </div>
+                      </td>
+                      {monthsCur.map(m=>(
+                        <td key={m.id} className="num">
+                          {hasSubs
+                            ? <span className="cat-total">{money(catTotal(cat.id,m.id))}</span>
+                            : <input className="cell num" type="number" inputMode="decimal"
+                                placeholder="0" disabled={!canEditValues}
+                                value={cells[keyOf(m.id,cat.id,"")]??""}
+                                onChange={e=>setCell(keyOf(m.id,cat.id,""),e.target.value)} />}
+                        </td>
+                      ))}
+                    </tr>
+                    {subs.map(s=>(
+                      <tr className="grid-sub-row" key={s.id}>
+                        <td className="left sticky-col"><span className="sub-name">↳ {s.name}</span></td>
+                        {monthsCur.map(m=>(
+                          <td key={m.id} className="num">
+                            <input className="cell num" type="number" inputMode="decimal"
+                              placeholder="0" disabled={!canEditValues}
+                              value={cells[keyOf(m.id,cat.id,s.id)]??""}
+                              onChange={e=>setCell(keyOf(m.id,cat.id,s.id),e.target.value)} />
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   3d) CONFIGURACIÓN · ejercicios, categorías, subcategorías, referencia
+   ============================================================ */
+function ConfigView({ categories, subcategories, fiscalYears, refFyId, reload, notify, onOpenReference }){
+  const [newCat, setNewCat] = useState({ name:"", type:"egreso" });
+  const [newFy, setNewFy]   = useState({ name:"", start_year:"", is_reference:false });
+  const [pickedCat, setPickedCat] = useState(categories[0]?.id || "");
+  const [newSubName, setNewSubName] = useState("");
+
+  /* --- Categorías --- */
+  const addCategory = async ()=>{
+    if(!newCat.name.trim()) return;
+    const maxOrder = categories.reduce((m,c)=>Math.max(m,c.order_index||0),0);
+    const { error } = await sb.from("categories")
+      .insert({ name:newCat.name.trim(), type:newCat.type, order_index:maxOrder+1 });
+    if(error){ notify("No se pudo crear la categoría."); return; }
+    setNewCat({ name:"", type:"egreso" }); notify("Categoría creada."); reload();
+  };
+  const delCategory = async (c)=>{
+    if(!confirm(`¿Eliminar "${c.name}" y todos sus datos cargados?`)) return;
+    const { error } = await sb.from("categories").delete().eq("id",c.id);
+    if(error){ notify("No se pudo eliminar."); return; }
+    notify("Categoría eliminada."); reload();
+  };
+
+  /* --- Subcategorías --- */
+  const subsOf = subcategories.filter(s=>s.category_id===pickedCat);
+  const addSub = async ()=>{
+    if(!newSubName.trim() || !pickedCat) return;
+    const { error } = await sb.from("subcategories").insert({ category_id:pickedCat, name:newSubName.trim() });
+    if(error){ notify("No se pudo crear la subcategoría."); return; }
+    setNewSubName(""); notify("Subcategoría creada."); reload();
+  };
+  const delSub = async (s)=>{
+    if(!confirm(`¿Eliminar subcategoría "${s.name}"?`)) return;
+    const { error } = await sb.from("subcategories").delete().eq("id",s.id);
+    if(error){ notify("No se pudo eliminar."); return; }
+    notify("Subcategoría eliminada."); reload();
+  };
+
+  /* --- Ejercicios --- */
+  const MES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  const addFiscalYear = async ()=>{
+    const sy = parseInt(newFy.start_year,10);
+    if(!newFy.name.trim() || isNaN(sy)){ notify("Completá nombre y año de inicio."); return; }
+    const { data:fy, error } = await sb.from("fiscal_years")
+      .insert({ name:newFy.name.trim(), start_month:4, start_year:sy, end_month:3, end_year:sy+1,
+                is_reference:newFy.is_reference }).select().single();
+    if(error){ notify("No se pudo crear el ejercicio."); return; }
+    // crear 12 meses (abril->marzo)
+    const rows=[];
+    for(let o=1;o<=12;o++){
+      const mnum = ((3+o-1)%12)+1;
+      const cyear = sy + (o>=10?1:0);
+      rows.push({ fiscal_year_id:fy.id, month_number:mnum, month_name:MES[mnum-1], calendar_year:cyear, order_index:o });
+    }
+    await sb.from("months").insert(rows);
+    setNewFy({ name:"", start_year:"", is_reference:false }); notify("Ejercicio creado con sus 12 meses."); reload();
+  };
+
+  return (
+    <div className="config-cols">
+      {/* Ejercicios */}
+      <section className="cfg-card">
+        <h3>Ejercicios</h3>
+        <ul className="cfg-list">
+          {fiscalYears.map(f=>(
+            <li key={f.id}><span>{f.name}</span>
+              <span className="badge">{f.is_reference?"referencia":"actual"}</span></li>
+          ))}
+        </ul>
+        <div className="cfg-form">
+          <input className="input-base" placeholder="Nombre (ej: 2027/2028)" value={newFy.name}
+            onChange={e=>setNewFy({...newFy,name:e.target.value})} />
+          <input className="input-base" type="number" placeholder="Año inicio (ej: 2027)" value={newFy.start_year}
+            onChange={e=>setNewFy({...newFy,start_year:e.target.value})} />
+          <label className="cfg-check">
+            <input type="checkbox" checked={newFy.is_reference}
+              onChange={e=>setNewFy({...newFy,is_reference:e.target.checked})} /> Es referencia
+          </label>
+          <button className="btn btn-primary" onClick={addFiscalYear}>Crear ejercicio</button>
+        </div>
+      </section>
+
+      {/* Categorías */}
+      <section className="cfg-card">
+        <h3>Categorías</h3>
+        <ul className="cfg-list scroll">
+          {categories.map(c=>(
+            <li key={c.id}>
+              <span><span className="type-bar" style={{background:TYPE_COLOR[c.type],display:"inline-block",verticalAlign:"middle",marginRight:7}}></span>{c.name}</span>
+              <button className="icon-btn" onClick={()=>delCategory(c)} title="Eliminar">🗑</button>
+            </li>
+          ))}
+        </ul>
+        <div className="cfg-form">
+          <input className="input-base" placeholder="Nueva categoría" value={newCat.name}
+            onChange={e=>setNewCat({...newCat,name:e.target.value})} />
+          <select className="input-base" value={newCat.type} onChange={e=>setNewCat({...newCat,type:e.target.value})}>
+            <option value="ingreso">Ingreso</option>
+            <option value="egreso">Egreso / gasto</option>
+            <option value="impuesto">Impuesto</option>
+            <option value="resultado">Resultado / calculada</option>
+          </select>
+          <button className="btn btn-primary" onClick={addCategory}>Agregar categoría</button>
+        </div>
+      </section>
+
+      {/* Subcategorías */}
+      <section className="cfg-card">
+        <h3>Subcategorías</h3>
+        <select className="input-base" value={pickedCat} onChange={e=>setPickedCat(e.target.value)}>
+          {categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <ul className="cfg-list scroll" style={{marginTop:10}}>
+          {subsOf.length===0 && <li style={{color:"var(--muted)"}}>Sin subcategorías</li>}
+          {subsOf.map(s=>(
+            <li key={s.id}><span>{s.name}</span>
+              <button className="icon-btn" onClick={()=>delSub(s)} title="Eliminar">🗑</button></li>
+          ))}
+        </ul>
+        <div className="cfg-form">
+          <input className="input-base" placeholder="Nueva subcategoría" value={newSubName}
+            onChange={e=>setNewSubName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addSub()} />
+          <button className="btn btn-primary" onClick={addSub}>Agregar subcategoría</button>
+        </div>
+      </section>
+
+      {/* Referencia */}
+      <section className="cfg-card">
+        <h3>Referencia (acumulado, promedio, %)</h3>
+        <p style={{fontSize:13,color:"var(--muted)"}}>Cargá los valores fijos del ejercicio de referencia por categoría.</p>
+        <button className="btn btn-teal" onClick={onOpenReference}>Editar referencia</button>
+      </section>
+    </div>
+  );
+}
+
+/* ============================================================
    4) DASHBOARD
    ============================================================ */
 function Dashboard({ session, role, onLogout }) {
@@ -520,6 +863,7 @@ function Dashboard({ session, role, onLogout }) {
   const [order, setOrder]     = useState(1);
   const [openCat, setOpenCat] = useState(null);
   const [refEditor, setRefEditor] = useState(false);
+  const [view, setView]       = useState("dashboard");
   const [toast, setToast]     = useState("");
 
   const canEditValues = role==="admin" || role==="carga";
@@ -657,6 +1001,12 @@ function Dashboard({ session, role, onLogout }) {
             <div className="sub">Seguimiento presupuestario</div>
           </div>
         </div>
+        <nav className="topnav">
+          <button className={"nav-item"+(view==="dashboard"?" active":"")} onClick={()=>setView("dashboard")}>Comparativo</button>
+          <button className={"nav-item"+(view==="grid"?" active":"")} onClick={()=>setView("grid")}>Carga mensual</button>
+          {role==="admin" &&
+            <button className={"nav-item"+(view==="config"?" active":"")} onClick={()=>setView("config")}>Configuración</button>}
+        </nav>
         <div className="who">
           <span>{session.user.email}</span>
           <span className="role-chip">{role}</span>
@@ -665,6 +1015,7 @@ function Dashboard({ session, role, onLogout }) {
       </div>
 
       <div className="container">
+       {view==="dashboard" && <>
         {/* Controles */}
         <div className="controls">
           <div className="field">
@@ -761,6 +1112,18 @@ function Dashboard({ session, role, onLogout }) {
             </table>
           </div>
         </div>
+       </>}
+
+       {view==="grid" &&
+        <GridView categories={categories} subcategories={subcategories} months={months}
+          values={values} currentFyId={currentFyId} fiscalYears={fiscalYears}
+          setCurrentFyId={setCurrentFyId} canEditValues={canEditValues} canEditSubs={canEditSubs}
+          reload={loadAll} notify={notify} />}
+
+       {view==="config" && role==="admin" &&
+        <ConfigView categories={categories} subcategories={subcategories} fiscalYears={fiscalYears}
+          referenceValues={referenceValues} refFyId={refFyId}
+          reload={loadAll} notify={notify} onOpenReference={()=>setRefEditor(true)} />}
       </div>
 
       {openCat && curMonth &&
