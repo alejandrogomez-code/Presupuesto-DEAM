@@ -151,6 +151,14 @@
   .modal-foot{padding:15px 22px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px;background:#fbfcfe}
 
   .empty{padding:40px;text-align:center;color:var(--muted);font-size:14px}
+  /* ---- Reference editor grid ---- */
+  .ref-grid{display:grid;grid-template-columns:1fr 130px 130px 90px;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid #f1f5f9}
+  .ref-grid.ref-head{position:sticky;top:0;background:var(--surface);border-bottom:1px solid var(--line);padding-bottom:8px;z-index:1}
+  .ref-grid.ref-head span{font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.4px;text-transform:uppercase;text-align:right}
+  .ref-grid.ref-head span:first-child{text-align:left}
+  .ref-cat{font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ref-grid input.amount{width:100%;border:1px solid var(--line);border-radius:7px;padding:7px 9px;text-align:right;font-size:13px;font-variant-numeric:tabular-nums}
+  .ref-grid input.amount:focus{outline:none;border-color:var(--teal);box-shadow:0 0 0 3px rgba(13,122,114,.13)}
   .loading{min-height:100vh;display:grid;place-items:center;color:var(--muted);font-weight:600}
   .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;
     padding:11px 18px;border-radius:10px;font-size:13.5px;font-weight:600;z-index:80;box-shadow:0 10px 30px rgba(0,0,0,.3)}
@@ -180,8 +188,8 @@ const { useState, useEffect, useMemo, useCallback } = React;
    Reemplazá estos dos valores por los de tu proyecto.
    (La anon key es pública por diseño: la seguridad la da RLS + Auth)
    ============================================================ */
-const SUPABASE_URL = "https://rjcfhhwhuzzzcpesqfzl.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJqY2ZoaHdodXp6emNwZXNxZnpsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MDYwOTcsImV4cCI6MjA5NzI4MjA5N30.pHREtc6sXO39-V_BVcNIk6CjMDDCro8ZmFkxav_3LDw";
+const SUPABASE_URL = "https://TU-PROYECTO.supabase.co";
+const SUPABASE_ANON_KEY = "TU_ANON_KEY";
 
 const configured = !SUPABASE_URL.includes("TU-PROYECTO") && !SUPABASE_ANON_KEY.includes("TU_ANON_KEY");
 const sb = configured ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
@@ -401,6 +409,102 @@ function CategoryModal({ category, subs, monthId, fiscalYearId, monthName, fyNam
 }
 
 /* ============================================================
+   3b) MODAL DE REFERENCIA (carga fija: acumulado, promedio, %)
+   ============================================================ */
+function ReferenceModal({ categories, fiscalYearId, refName, referenceValues, onClose, onSaved, notify }){
+  const init = {};
+  categories.forEach(c=>{
+    const v = referenceValues.find(r=>r.category_id===c.id);
+    init[c.id] = {
+      accumulated: v && v.accumulated!=null ? String(v.accumulated) : "",
+      average:     v && v.average!=null     ? String(v.average)     : "",
+      pct_sales:   v && v.pct_sales!=null    ? String(v.pct_sales)   : "",
+    };
+  });
+  const [data, setData] = useState(init);
+  const [busy, setBusy] = useState(false);
+
+  const setField = (catId, key, val) =>
+    setData(d=>({ ...d, [catId]:{ ...d[catId], [key]:val } }));
+
+  // Atajo: promedio = acumulado / 12
+  const fillAvg = (catId) => {
+    const acc = parseFloat(data[catId].accumulated);
+    if(!isNaN(acc)) setField(catId,"average", String(+(acc/12).toFixed(2)));
+  };
+
+  const save = async () => {
+    setBusy(true);
+    const rows = [];
+    categories.forEach(c=>{
+      const d = data[c.id];
+      const acc = parseFloat(d.accumulated), avg = parseFloat(d.average), p = parseFloat(d.pct_sales);
+      const any = d.accumulated!=="" || d.average!=="" || d.pct_sales!=="";
+      if(any){
+        rows.push({
+          fiscal_year_id: fiscalYearId, category_id: c.id,
+          accumulated: isNaN(acc)?0:acc,
+          average:     isNaN(avg)?0:avg,
+          pct_sales:   isNaN(p)?null:p,
+        });
+      }
+    });
+    if(rows.length){
+      const { error } = await sb.from("reference_values")
+        .upsert(rows, { onConflict:"fiscal_year_id,category_id" });
+      if(error){ notify("Error al guardar la referencia."); setBusy(false); return; }
+    }
+    setBusy(false);
+    notify("Referencia guardada.");
+    onSaved();
+  };
+
+  return (
+    <div className="overlay" onMouseDown={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:760}}>
+        <div className="modal-head">
+          <div>
+            <h3>Referencia · {refName}</h3>
+            <div className="ctx">Valores fijos por categoría. Se usan como referencia en todos los meses.</div>
+          </div>
+          <button className="x-btn" onClick={onClose}>×</button>
+        </div>
+        <div className="modal-body">
+          <div className="ref-grid ref-head">
+            <span>Categoría</span><span>Acumulado</span><span>Promedio</span><span>% s/ventas</span>
+          </div>
+          {categories.map(c=>(
+            <div className="ref-grid" key={c.id}>
+              <span className="ref-cat" title={c.name}>{c.name}</span>
+              <span className="ref-input-wrap">
+                <input className="amount num" type="number" inputMode="decimal" placeholder="0"
+                  value={data[c.id].accumulated}
+                  onChange={e=>setField(c.id,"accumulated",e.target.value)}
+                  onBlur={()=>{ if(data[c.id].average==="") fillAvg(c.id); }} />
+              </span>
+              <input className="amount num" type="number" inputMode="decimal" placeholder="0"
+                value={data[c.id].average}
+                onChange={e=>setField(c.id,"average",e.target.value)} />
+              <input className="amount num" type="number" inputMode="decimal" placeholder="%"
+                value={data[c.id].pct_sales}
+                onChange={e=>setField(c.id,"pct_sales",e.target.value)} />
+            </div>
+          ))}
+          <p style={{fontSize:12,color:"var(--muted)",marginTop:12}}>
+            Tip: al completar el acumulado, el promedio se sugiere solo (acumulado ÷ 12). Podés sobrescribirlo.
+          </p>
+        </div>
+        <div className="modal-foot">
+          <button className="btn" onClick={onClose}>Cerrar</button>
+          <button className="btn btn-teal" onClick={save} disabled={busy}>
+            {busy?"Guardando…":"Guardar referencia"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
    4) DASHBOARD
    ============================================================ */
 function Dashboard({ session, role, onLogout }) {
@@ -410,10 +514,12 @@ function Dashboard({ session, role, onLogout }) {
   const [categories, setCategories] = useState([]);
   const [subcategories, setSubcategories] = useState([]);
   const [values, setValues]   = useState([]);
+  const [referenceValues, setReferenceValues] = useState([]);
   const [currentFyId, setCurrentFyId] = useState(null);
   const [refFyId, setRefFyId] = useState(null);
   const [order, setOrder]     = useState(1);
   const [openCat, setOpenCat] = useState(null);
+  const [refEditor, setRefEditor] = useState(false);
   const [toast, setToast]     = useState("");
 
   const canEditValues = role==="admin" || role==="carga";
@@ -422,20 +528,22 @@ function Dashboard({ session, role, onLogout }) {
   const notify = (m)=>{ setToast(m); setTimeout(()=>setToast(""),2600); };
 
   const loadAll = useCallback(async () => {
-    const [fy, mo, cat, sub, val] = await Promise.all([
+    const [fy, mo, cat, sub, val, ref] = await Promise.all([
       sb.from("fiscal_years").select("*").order("start_year"),
       sb.from("months").select("*"),
       sb.from("categories").select("*").order("order_index"),
       sb.from("subcategories").select("*").eq("active",true).order("created_at"),
       sb.from("monthly_values").select("*"),
+      sb.from("reference_values").select("*"),
     ]);
     setFiscalYears(fy.data||[]); setMonths(mo.data||[]);
     setCategories(cat.data||[]); setSubcategories(sub.data||[]); setValues(val.data||[]);
+    setReferenceValues(ref.data||[]);
 
     const cur = (fy.data||[]).find(f=>!f.is_reference);
-    const ref = (fy.data||[]).find(f=>f.is_reference);
+    const ref2 = (fy.data||[]).find(f=>f.is_reference);
     setCurrentFyId(prev=>prev|| cur?.id || null);
-    setRefFyId(prev=>prev|| ref?.id || null);
+    setRefFyId(prev=>prev|| ref2?.id || null);
     setLoading(false);
   }, []);
 
@@ -478,22 +586,30 @@ function Dashboard({ session, role, onLogout }) {
   const ventasMonthCur = ventasId ? catMonth(currentFyId, ventasId, order) : 0;
   const ventasAccumCur = ventasId ? catAccum(currentFyId, ventasId, order) : 0;
 
+  // Referencia fija por categoría (acumulado, promedio, % s/ventas) del ejercicio de referencia
+  const refMap = useMemo(()=>{
+    const m={};
+    for(const r of referenceValues){ if(r.fiscal_year_id===refFyId) m[r.category_id]=r; }
+    return m;
+  }, [referenceValues, refFyId]);
+
   /* ----- Filas de la tabla ----- */
   const rows = useMemo(()=> categories.map(cat=>{
-    const mes      = catMonth(currentFyId, cat.id, order);
-    const acum     = catAccum(currentFyId, cat.id, order);
-    const prom      = order>0 ? acum/order : 0;
-    const mesRef   = catMonth(refFyId, cat.id, order);
-    const acumRef  = catAccum(refFyId, cat.id, order);
-    const difMes   = mes - mesRef;
-    const difMesPct= mesRef!==0 ? (difMes/Math.abs(mesRef))*100 : null;
-    const difAcum  = acum - acumRef;
+    const mes   = catMonth(currentFyId, cat.id, order);
+    const acum  = catAccum(currentFyId, cat.id, order);
+    const prom  = order>0 ? acum/order : 0;
+    const ref   = refMap[cat.id] || {};
+    const refAcum = Number(ref.accumulated||0);
+    const refProm = Number(ref.average||0);
+    const refPct  = ref.pct_sales!=null ? Number(ref.pct_sales) : null;
+    const difAcum    = acum - refAcum;
+    const difAcumPct = refAcum!==0 ? (difAcum/Math.abs(refAcum))*100 : null;
     return {
-      cat, mes, acum, prom, mesRef, acumRef, difMes, difMesPct, difAcum,
-      pctVtaMes: ventasMonthCur!==0 ? (mes/ventasMonthCur)*100 : null,
+      cat, mes, acum, prom, refAcum, refProm, refPct, difAcum, difAcumPct,
+      pctVtaMes:  ventasMonthCur!==0 ? (mes/ventasMonthCur)*100 : null,
       pctVtaAcum: ventasAccumCur!==0 ? (acum/ventasAccumCur)*100 : null,
     };
-  }), [categories, currentFyId, refFyId, order, catMonth, catAccum, ventasMonthCur, ventasAccumCur]);
+  }), [categories, currentFyId, order, catMonth, catAccum, refMap, ventasMonthCur, ventasAccumCur]);
 
   const kpiFor = (name) => rows.find(r=>r.cat.name===name) || {};
   const kpiVentas = kpiFor("Total de Ventas");
@@ -515,11 +631,11 @@ function Dashboard({ session, role, onLogout }) {
       "Acumulado": r.acum,
       "% s/ventas acum": r.pctVtaAcum!=null? +r.pctVtaAcum.toFixed(1):null,
       "Promedio mensual": +r.prom.toFixed(2),
-      "Mes referencia": r.mesRef,
-      "Acumulado referencia": r.acumRef,
-      "Diferencia $ (mes)": r.difMes,
-      "Diferencia % (mes)": r.difMesPct!=null? +r.difMesPct.toFixed(1):null,
+      "Acum. referencia": r.refAcum,
+      "Prom. referencia": r.refProm,
+      "% referencia": r.refPct,
       "Diferencia $ (acum)": r.difAcum,
+      "Diferencia % (acum)": r.difAcumPct!=null? +r.difAcumPct.toFixed(1):null,
     }));
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
@@ -570,19 +686,21 @@ function Dashboard({ session, role, onLogout }) {
             </select>
           </div>
           <div className="spacer"></div>
+          {canEditSubs &&
+            <button className="btn" onClick={()=>setRefEditor(true)}>✎ Editar referencia {refName}</button>}
           <button className="btn btn-teal" onClick={exportXlsx}>⬇ Exportar a Excel</button>
         </div>
 
-        {/* KPI cards */}
+        {/* KPI cards (acumulado vs referencia) */}
         <div className="kpis">
-          <KpiCard label="Total Ventas" accent="var(--t-ingreso)" value={kpiVentas.mes}
-            refVal={kpiVentas.mesRef} type="ingreso" />
-          <KpiCard label="Utilidad Bruta" accent="var(--navy)" value={kpiBruta.mes}
-            refVal={kpiBruta.mesRef} type="resultado" />
-          <KpiCard label="Utilidad Neta" accent="var(--teal)" value={kpiNeta.mes}
-            refVal={kpiNeta.mesRef} type="resultado" />
-          <KpiCard label="Resultado desp. impuesto" accent="#7c3aed" value={kpiResult.mes}
-            refVal={kpiResult.mesRef} type="resultado" />
+          <KpiCard label="Total Ventas · acum." accent="var(--t-ingreso)" value={kpiVentas.acum}
+            refVal={kpiVentas.refAcum} type="ingreso" />
+          <KpiCard label="Utilidad Bruta · acum." accent="var(--navy)" value={kpiBruta.acum}
+            refVal={kpiBruta.refAcum} type="resultado" />
+          <KpiCard label="Utilidad Neta · acum." accent="var(--teal)" value={kpiNeta.acum}
+            refVal={kpiNeta.refAcum} type="resultado" />
+          <KpiCard label="Resultado desp. imp. · acum." accent="#7c3aed" value={kpiResult.acum}
+            refVal={kpiResult.refAcum} type="resultado" />
         </div>
 
         {/* Tabla principal */}
@@ -601,17 +719,18 @@ function Dashboard({ session, role, onLogout }) {
                   <th>Acumulado</th>
                   <th>% s/vtas acum</th>
                   <th>Prom. mensual</th>
-                  <th>Mes referencia</th>
-                  <th>Acum. referencia</th>
-                  <th>Dif. $ (mes)</th>
-                  <th>Dif. % (mes)</th>
+                  <th>Acum. ref.</th>
+                  <th>Prom. ref.</th>
+                  <th>% ref.</th>
+                  <th>Dif. $ (acum)</th>
+                  <th>Dif. % (acum)</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map(r=>{
-                  const fav = goodIfUp(r.cat.type) ? r.difMes>=0 : r.difMes<=0;
-                  const diffClass = r.difMes===0 ? "" : (fav?"pos":"neg");
+                  const fav = goodIfUp(r.cat.type) ? r.difAcum>=0 : r.difAcum<=0;
+                  const diffClass = r.difAcum===0 ? "" : (fav?"pos":"neg");
                   return (
                     <tr key={r.cat.id} className={r.cat.is_calculated?"calc":""}>
                       <td className="left">
@@ -626,10 +745,11 @@ function Dashboard({ session, role, onLogout }) {
                       <td className="num">{money(r.acum)}</td>
                       <td className="num pct">{pct(r.pctVtaAcum)}</td>
                       <td className="num pct">{money(r.prom)}</td>
-                      <td className="num">{money(r.mesRef)}</td>
-                      <td className="num">{money(r.acumRef)}</td>
-                      <td className={"num diff "+diffClass}>{r.difMes>0?"+":""}{money(r.difMes)}</td>
-                      <td className={"num diff "+diffClass}>{r.difMesPct!=null?(r.difMesPct>0?"+":"")+pct(r.difMesPct):"—"}</td>
+                      <td className="num">{money(r.refAcum)}</td>
+                      <td className="num pct">{money(r.refProm)}</td>
+                      <td className="num pct">{pct(r.refPct)}</td>
+                      <td className={"num diff "+diffClass}>{r.difAcum>0?"+":""}{money(r.difAcum)}</td>
+                      <td className={"num diff "+diffClass}>{r.difAcumPct!=null?(r.difAcumPct>0?"+":"")+pct(r.difAcumPct):"—"}</td>
                       <td>
                         <button className="link-btn" onClick={()=>setOpenCat(r.cat)}>
                           {canEditSubs?"Editar":"Ver"} detalle</button>
@@ -656,6 +776,17 @@ function Dashboard({ session, role, onLogout }) {
           canEditSubs={canEditSubs}
           onClose={()=>setOpenCat(null)}
           onSaved={()=>{ setOpenCat(null); loadAll(); }}
+          notify={notify}
+        />}
+
+      {refEditor &&
+        <ReferenceModal
+          categories={categories}
+          fiscalYearId={refFyId}
+          refName={refName}
+          referenceValues={referenceValues.filter(r=>r.fiscal_year_id===refFyId)}
+          onClose={()=>setRefEditor(false)}
+          onSaved={()=>{ setRefEditor(false); loadAll(); }}
           notify={notify}
         />}
 
