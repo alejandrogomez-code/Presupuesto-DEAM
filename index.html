@@ -180,8 +180,8 @@ const { useState, useEffect, useMemo, useCallback } = React;
    Reemplazá estos dos valores por los de tu proyecto.
    (La anon key es pública por diseño: la seguridad la da RLS + Auth)
    ============================================================ */
-const SUPABASE_URL = "https://TU-PROYECTO.supabase.co";
-const SUPABASE_ANON_KEY = "TU_ANON_KEY";
+const SUPABASE_URL = "https://rjcfhhwhuzzzcpesqfzl.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJqY2ZoaHdodXp6emNwZXNxZnpsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MDYwOTcsImV4cCI6MjA5NzI4MjA5N30.pHREtc6sXO39-V_BVcNIk6CjMDDCro8ZmFkxav_3LDw";
 
 const configured = !SUPABASE_URL.includes("TU-PROYECTO") && !SUPABASE_ANON_KEY.includes("TU_ANON_KEY");
 const sb = configured ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
