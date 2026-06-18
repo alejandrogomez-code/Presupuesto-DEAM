@@ -17,6 +17,7 @@
 <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 
 <style>
   :root{
@@ -239,6 +240,25 @@
   .users-table td{padding:8px 6px;border-bottom:1px solid #f1f5f9}
   .users-table td.left{font-weight:600}
   .users-table select{padding:7px 30px 7px 10px;min-width:160px}
+
+  /* ---- Segmented toggle ---- */
+  .seg{display:inline-flex;background:#eef2f7;border:1px solid var(--line);border-radius:9px;padding:3px;gap:2px}
+  .seg-btn{border:none;background:transparent;padding:7px 13px;border-radius:7px;font-size:13px;font-weight:600;color:var(--muted)}
+  .seg-btn.on{background:#fff;color:var(--navy);box-shadow:0 1px 2px rgba(16,30,54,.12)}
+
+  /* ---- Composition bars ---- */
+  .bar-row{display:grid;grid-template-columns:1fr 130px 64px;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid #f1f5f9}
+  .bar-name{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bar-track{height:9px;background:#eef2f7;border-radius:5px;overflow:hidden}
+  .bar-fill{height:100%;border-radius:5px}
+  .bar-val{font-size:12.5px;font-weight:700;text-align:right}
+
+  /* ---- Alerts ---- */
+  .alert-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #f1f5f9}
+  .alert-dot{width:9px;height:9px;border-radius:50%;flex:none}
+  .alert-dot.bad{background:var(--neg)} .alert-dot.good{background:var(--pos)}
+  .alert-name{font-size:13px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .alert-dpp{font-size:12.5px;font-weight:700}
   .loading{min-height:100vh;display:grid;place-items:center;color:var(--muted);font-weight:600}
   .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;
     padding:11px 18px;border-radius:10px;font-size:13.5px;font-weight:600;z-index:80;box-shadow:0 10px 30px rgba(0,0,0,.3)}
@@ -317,6 +337,27 @@ function evalByName(name, getLeaf, memo){
   if(memo) memo[name]=v;
   return v;
 }
+
+// Las tres series de resultado para gráficos/análisis
+const METRICS3 = [
+  { name:"Utilidad Bruta",                  label:"Utilidad Bruta",        color:"#1f6feb" },
+  { name:"Total de Utilidad Neta",          label:"Utilidad Neta",         color:"#0d7a72" },
+  { name:"Resultado después del impuesto",  label:"Resultado desp. imp.",  color:"#7c3aed" },
+];
+// Regresión lineal sobre [{x,y}] -> {m,b}
+function linreg(pts){
+  const n=pts.length; if(n<2) return null;
+  let sx=0,sy=0,sxy=0,sxx=0;
+  pts.forEach(p=>{ sx+=p.x; sy+=p.y; sxy+=p.x*p.y; sxx+=p.x*p.x; });
+  const d=n*sxx-sx*sx; if(d===0) return null;
+  const m=(n*sxy-sx*sy)/d; return { m, b:(sy-m*sx)/n };
+}
+// Eje compacto para montos grandes
+const compactMoney = (v)=>{ const a=Math.abs(v);
+  if(a>=1e9) return "$"+(v/1e9).toLocaleString("es-AR",{maximumFractionDigits:1})+"MM";
+  if(a>=1e6) return "$"+(v/1e6).toLocaleString("es-AR",{maximumFractionDigits:1})+"M";
+  if(a>=1e3) return "$"+(v/1e3).toLocaleString("es-AR",{maximumFractionDigits:0})+"k";
+  return "$"+v; };
 
 /* Input con formato: muestra $/% cuando no está enfocado, número crudo al editar.
    El valor que sube por onChange siempre es un string numérico plano (punto decimal). */
@@ -960,7 +1001,7 @@ function GridView({ categories, subcategories, months, values, currentFyId, fisc
 /* ============================================================
    3d) CONFIGURACIÓN · ejercicios, categorías, subcategorías, referencia
    ============================================================ */
-function ConfigView({ categories, subcategories, fiscalYears, profiles, myEmail, reload, notify, onGoReference, onBack }){
+function ConfigView({ categories, subcategories, fiscalYears, profiles, myEmail, months, values, refFyId, reload, notify, onGoReference, onBack }){
   const [newCat, setNewCat] = useState({ name:"", type:"egreso" });
   const [newFy, setNewFy]   = useState({ name:"", start_year:"", is_reference:false });
   const [pickedCat, setPickedCat] = useState(categories[0]?.id || "");
@@ -1070,6 +1111,10 @@ function ConfigView({ categories, subcategories, fiscalYears, profiles, myEmail,
           <button className="btn btn-teal" onClick={onGoReference}>Abrir carga de referencia</button>
         </section>
 
+        {/* Utilidades mensuales 2025/2026 para gráficos */}
+        <RefUtilGrid categories={categories} months={months} values={values} refFyId={refFyId}
+          canEdit={true} reload={reload} notify={notify} />
+
         {/* Ejercicios */}
         <section className="cfg-card">
           <h3>Ejercicios</h3>
@@ -1137,6 +1182,338 @@ function ConfigView({ categories, subcategories, fiscalYears, profiles, myEmail,
         </section>
       </div>
     </div>
+  );
+}
+
+/* ============================================================
+   3e) Wrapper de Chart.js
+   ============================================================ */
+function LineChart({ labels, datasets, height=360, yIsPct=false }){
+  const canRef = React.useRef(null);
+  const chRef  = React.useRef(null);
+  useEffect(()=>{
+    if(!canRef.current || !window.Chart) return;
+    if(chRef.current) chRef.current.destroy();
+    const fmt = (v)=> v==null?"—":(yIsPct?pct(v):money(v));
+    chRef.current = new Chart(canRef.current, {
+      type:"line",
+      data:{ labels, datasets },
+      options:{
+        responsive:true, maintainAspectRatio:false, spanGaps:true,
+        interaction:{ mode:"index", intersect:false },
+        plugins:{
+          legend:{ labels:{ usePointStyle:true, boxWidth:8, font:{ family:"Inter", size:12 } } },
+          tooltip:{ callbacks:{ label:(c)=> `${c.dataset.label}: ${fmt(c.parsed.y)}` } }
+        },
+        scales:{
+          x:{ grid:{ display:false }, ticks:{ font:{ family:"Inter", size:11 }, maxRotation:0, autoSkip:true, maxTicksLimit:14 } },
+          y:{ grid:{ color:"#eef2f7" }, ticks:{ font:{ family:"Inter", size:11 },
+              callback:(v)=> yIsPct?`${v}%`:compactMoney(v) } }
+        }
+      }
+    });
+    return ()=>{ if(chRef.current){ chRef.current.destroy(); chRef.current=null; } };
+  }, [labels, datasets, yIsPct, height]);
+  return <div style={{height}}><canvas ref={canRef}></canvas></div>;
+}
+
+/* ============================================================
+   3f) GRÁFICOS · evolución de utilidades
+   ============================================================ */
+function GraphsView({ H, onBack }){
+  const [mode, setMode]   = useState("all");      // all | single
+  const [pick, setPick]   = useState(METRICS3[0].name);
+  const [acum, setAcum]   = useState(false);      // mensual | acumulado
+
+  const { timeline, seriesMonth, hasData } = H;
+
+  // valores por serie a lo largo del timeline (null cuando no hay datos)
+  const seriesData = (name)=>{
+    let run=0;
+    return timeline.map(t=>{
+      const has = hasData(t.fy, t.m.order_index);
+      const v = seriesMonth(t.fy, name, t.m.order_index);
+      if(acum){ run += has?v:0; return has?run:null; }
+      return has?v:null;
+    });
+  };
+
+  const labels = timeline.map(t=>t.label);
+  const mk = (m)=>({
+    label:m.label, data:seriesData(m.name), borderColor:m.color,
+    backgroundColor:m.color+"22", tension:0.4, pointRadius:2, pointHoverRadius:5, borderWidth:2.5, fill:false,
+  });
+
+  let datasets;
+  if(mode==="all"){
+    datasets = METRICS3.map(mk);
+  } else {
+    const m = METRICS3.find(x=>x.name===pick);
+    const base = mk(m);
+    // tendencia + proyección a fin de ejercicio
+    const pts = base.data.map((y,x)=> y==null?null:{x,y}).filter(Boolean);
+    const lr = linreg(pts);
+    const trend = lr ? labels.map((_,x)=> +(lr.m*x+lr.b).toFixed(2)) : [];
+    datasets = [ base ];
+    if(lr) datasets.push({ label:"Tendencia / proyección", data:trend, borderColor:m.color,
+      borderDash:[6,5], borderWidth:1.6, pointRadius:0, tension:0, fill:false });
+  }
+
+  return (
+    <div>
+      <div className="section-head">
+        <button className="back-btn" onClick={onBack}>← Inicio</button>
+        <div>
+          <h1 className="section-title">Gráficos</h1>
+          <p className="section-sub">Evolución de las utilidades desde 2025/2026 hasta hoy, con tendencia y proyección.</p>
+        </div>
+      </div>
+
+      <div className="controls">
+        <div className="seg">
+          <button className={"seg-btn"+(mode==="all"?" on":"")} onClick={()=>setMode("all")}>Las tres</button>
+          <button className={"seg-btn"+(mode==="single"?" on":"")} onClick={()=>setMode("single")}>Una sola</button>
+        </div>
+        {mode==="single" &&
+          <div className="field">
+            <label>Serie</label>
+            <select value={pick} onChange={e=>setPick(e.target.value)}>
+              {METRICS3.map(m=><option key={m.name} value={m.name}>{m.label}</option>)}
+            </select>
+          </div>}
+        <div className="seg">
+          <button className={"seg-btn"+(!acum?" on":"")} onClick={()=>setAcum(false)}>Mensual</button>
+          <button className={"seg-btn"+(acum?" on":"")} onClick={()=>setAcum(true)}>Acumulado</button>
+        </div>
+      </div>
+
+      <div className="panel" style={{padding:18}}>
+        <LineChart labels={labels} datasets={datasets} height={420} />
+      </div>
+      <p style={{fontSize:12,color:"var(--muted)",marginTop:10}}>
+        2025/2026 usa los valores mensuales cargados en Configuración; 2026/2027 se calcula desde los datos del mes.
+        La tendencia (línea punteada) es una regresión lineal extendida hasta el fin del ejercicio.
+      </p>
+    </div>
+  );
+}
+
+/* ============================================================
+   3g) ANÁLISIS · proyección, margen y composición
+   ============================================================ */
+function AnalysisView({ H, onBack }){
+  const { categories, currentFyId, order, valAccum, valMonth, refAcumVal, monthsCur, fyName } = H;
+  const meses = order; // meses transcurridos = mes seleccionado
+
+  const ventasAcum = valAccum(currentFyId, "Total de Ventas", order);
+
+  // Proyección de cierre (run-rate) por categoría
+  const projRows = categories.map(c=>{
+    const acum = valAccum(currentFyId, c.name, order);
+    const proj = meses>0 ? acum/meses*12 : 0;
+    const ref  = refAcumVal(c.name);
+    return { c, acum, proj, ref, dif: proj-ref };
+  });
+  const keyProj = METRICS3.map(m=> projRows.find(r=>r.c.name===m.name)).filter(Boolean);
+
+  // Margen % en el tiempo (ejercicio actual)
+  const marginLabels = monthsCur.map(m=>`${m.month_name.slice(0,3)} ${String(m.calendar_year).slice(2)}`);
+  const marginDatasets = METRICS3.map(mt=>({
+    label:mt.label,
+    data: monthsCur.map(m=>{
+      const ventas = valMonth(currentFyId,"Total de Ventas",m.order_index);
+      const val = valMonth(currentFyId, mt.name, m.order_index);
+      return ventas!==0 ? +((val/ventas)*100).toFixed(2) : null;
+    }),
+    borderColor:mt.color, backgroundColor:mt.color+"22", tension:0.4, pointRadius:2, borderWidth:2.5, fill:false,
+  }));
+
+  // Composición de costos (acum) como % de ventas, egresos+impuestos, top desc
+  const comp = categories
+    .filter(c=>(c.type==="egreso"||c.type==="impuesto") && !isCalcName(c.name))
+    .map(c=>{ const a=valAccum(currentFyId,c.name,order); return { c, a, pct: ventasAcum!==0?(a/ventasAcum)*100:0 }; })
+    .sort((x,y)=>y.pct-x.pct);
+  const compMax = Math.max(1, ...comp.map(x=>x.pct));
+
+  // Alertas: % s/ventas acum vs % referencia (desvío en p.p.)
+  const alerts = categories
+    .filter(c=>(c.type==="egreso"||c.type==="impuesto") && !isCalcName(c.name))
+    .map(c=>{
+      const a=valAccum(currentFyId,c.name,order);
+      const cur = ventasAcum!==0 ? (a/ventasAcum)*100 : null;
+      const ref = H.refPctVal(c.name);
+      return { c, cur, ref, dpp: (cur!=null&&ref!=null)? cur-ref : null };
+    })
+    .filter(x=>x.dpp!=null && Math.abs(x.dpp)>=0.5)
+    .sort((x,y)=>Math.abs(y.dpp)-Math.abs(x.dpp))
+    .slice(0,8);
+
+  return (
+    <div>
+      <div className="section-head">
+        <button className="back-btn" onClick={onBack}>← Inicio</button>
+        <div>
+          <h1 className="section-title">Análisis</h1>
+          <p className="section-sub">Proyección de cierre, margen en el tiempo y composición de costos · {fyName}</p>
+        </div>
+      </div>
+
+      {/* Proyección cierre - cards */}
+      <div className="kpis">
+        {keyProj.map(r=>{
+          const fav = r.dif>=0;
+          return (
+            <div className="kpi" key={r.c.id} style={{"--accent":"var(--navy)"}}>
+              <div className="k-label">{r.c.name} · proyección</div>
+              <div className="k-val num">{money(r.proj)}</div>
+              <div className="k-sub">
+                <span className={"delta "+(fav?"pos":"neg")}>{fav?"▲":"▼"} {money(Math.abs(r.dif))}</span>
+                <span>vs ref. acum</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Margen % en el tiempo */}
+      <div className="panel" style={{padding:18, marginBottom:18}}>
+        <div className="panel-head" style={{padding:"0 0 12px", border:"none"}}>
+          <h2>Margen % sobre ventas en el tiempo</h2>
+          <span className="hint">{fyName}</span>
+        </div>
+        <LineChart labels={marginLabels} datasets={marginDatasets} height={300} yIsPct />
+      </div>
+
+      <div className="config-cols">
+        {/* Composición de costos */}
+        <section className="cfg-card">
+          <h3>Composición de costos (% s/ventas acum)</h3>
+          {comp.length===0 && <p style={{color:"var(--muted)",fontSize:13}}>Sin datos cargados.</p>}
+          {comp.slice(0,12).map(x=>(
+            <div className="bar-row" key={x.c.id}>
+              <span className="bar-name" title={x.c.name}>{x.c.name}</span>
+              <div className="bar-track"><div className="bar-fill" style={{width:`${(x.pct/compMax)*100}%`,background:TYPE_COLOR[x.c.type]}}></div></div>
+              <span className="bar-val num">{pct(x.pct)}</span>
+            </div>
+          ))}
+        </section>
+
+        {/* Alertas */}
+        <section className="cfg-card">
+          <h3>Alertas de desvío (vs referencia)</h3>
+          {alerts.length===0 && <p style={{color:"var(--muted)",fontSize:13}}>No hay desvíos relevantes (≥ 0,50 p.p.).</p>}
+          {alerts.map(a=>{
+            const bad = a.dpp>0; // gasto/impuesto que sube su peso sobre ventas = desfavorable
+            return (
+              <div className="alert-row" key={a.c.id}>
+                <span className={"alert-dot "+(bad?"bad":"good")}></span>
+                <span className="alert-name">{a.c.name}</span>
+                <span className={"alert-dpp "+(bad?"neg":"pos")}>{a.dpp>0?"+":""}{pct(a.dpp)} p.p.</span>
+              </div>
+            );
+          })}
+          <p style={{fontSize:11.5,color:"var(--muted)",marginTop:10}}>
+            Compara el % sobre ventas acumulado contra el % de referencia. En rojo, gastos que pesan más que la referencia.
+          </p>
+        </section>
+      </div>
+
+      {/* Tabla de proyección completa */}
+      <div className="panel" style={{marginTop:18}}>
+        <div className="panel-head"><h2>Proyección de cierre por categoría</h2>
+          <span className="hint">Run-rate: acumulado ÷ {meses} meses × 12</span></div>
+        <div className="table-scroll">
+          <table>
+            <thead><tr>
+              <th className="left">Categoría</th><th>Acumulado</th><th>Proyección anual</th>
+              <th>Referencia (acum)</th><th>Dif. proyección</th>
+            </tr></thead>
+            <tbody>
+              {projRows.map(r=>{
+                const hi=HILITE[r.c.name];
+                const fav = goodIfUp(r.c.type) ? r.dif>=0 : r.dif<=0;
+                return (
+                  <tr key={r.c.id} className={hi||""}>
+                    <td className="left"><div className="cat-cell">
+                      <span className="type-bar" style={{background:TYPE_COLOR[r.c.type]}}></span>
+                      <span className={"cat-name"+(hi==="hi-key"?" strong":"")}>{r.c.name}</span></div></td>
+                    <td className="num">{money(r.acum)}</td>
+                    <td className="num">{money(r.proj)}</td>
+                    <td className="num">{money(r.ref)}</td>
+                    <td className={"num diff "+(r.dif===0?"":(fav?"pos":"neg"))}>{r.dif>0?"+":""}{money(r.dif)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   3h) Cargador mensual de utilidades 2025/2026 (para gráficos)
+   ============================================================ */
+function RefUtilGrid({ categories, months, values, refFyId, canEdit, reload, notify }){
+  const refMonths = months.filter(m=>m.fiscal_year_id===refFyId).sort((a,b)=>a.order_index-b.order_index);
+  const byName = {}; categories.forEach(c=>{ byName[c.name]=c; });
+  const metricCats = METRICS3.map(m=>byName[m.name]).filter(Boolean);
+  const keyOf=(mId,cId)=>`${mId}::${cId}`;
+  const init={};
+  values.forEach(v=>{
+    if(v.subcategory_id==null && refMonths.some(m=>m.id===v.month_id) && metricCats.some(c=>c.id===v.category_id))
+      init[keyOf(v.month_id,v.category_id)] = v.amount!=null?String(v.amount):"";
+  });
+  const [cells,setCells]=useState(init);
+  const [dirty,setDirty]=useState(()=>new Set());
+  const [busy,setBusy]=useState(false);
+  const setCell=(k,val)=>{ setCells(c=>({...c,[k]:val})); setDirty(d=>{const n=new Set(d);n.add(k);return n;}); };
+
+  const save=async()=>{
+    setBusy(true);
+    const ups=[],dels=[];
+    dirty.forEach(k=>{ const [mId,cId]=k.split("::"); const raw=cells[k];
+      if(raw===""||isNaN(parseFloat(raw))) dels.push({mId,cId});
+      else ups.push({ fiscal_year_id:refFyId, month_id:mId, category_id:cId, subcategory_id:null, amount:parseFloat(raw) });
+    });
+    if(ups.length){
+      const { error }=await sb.from("monthly_values").upsert(ups,{onConflict:"month_id,category_id,subcategory_id"});
+      if(error){ notify("Error al guardar (¿permiso de carga?)."); setBusy(false); return; }
+    }
+    for(const d of dels) await sb.from("monthly_values").delete().eq("month_id",d.mId).eq("category_id",d.cId).is("subcategory_id",null);
+    setBusy(false); notify("Utilidades 2025/2026 guardadas."); reload();
+  };
+
+  return (
+    <section className="cfg-card cfg-wide">
+      <h3>Utilidades mensuales 2025/2026 (para gráficos)</h3>
+      <p style={{fontSize:12.5,color:"var(--muted)",margin:"0 0 10px"}}>
+        Cargá mes a mes solo estas tres líneas del ejercicio de referencia. Se usan para dibujar la curva histórica.
+      </p>
+      <div className="table-scroll">
+        <table className="grid-table">
+          <thead><tr><th className="left sticky-col">Métrica</th>
+            {refMonths.map(m=><th key={m.id}>{m.month_name.slice(0,3)} {String(m.calendar_year).slice(2)}</th>)}</tr></thead>
+          <tbody>
+            {metricCats.map(c=>(
+              <tr key={c.id} className="grid-cat-row">
+                <td className="left sticky-col"><span className="cat-name">{c.name}</span></td>
+                {refMonths.map(m=>(
+                  <td key={m.id} className="num">
+                    <FmtInput className="cell num" kind="money" disabled={!canEdit} placeholder="$ 0,00"
+                      value={cells[keyOf(m.id,c.id)]??""} onChange={v=>setCell(keyOf(m.id,c.id),v)} />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {canEdit &&
+        <button className="btn btn-teal" style={{marginTop:12}} onClick={save} disabled={busy||dirty.size===0}>
+          {busy?"Guardando…":`Guardar${dirty.size?` (${dirty.size})`:""}`}</button>}
+    </section>
   );
 }
 
@@ -1304,6 +1681,41 @@ function Dashboard({ session, role, onLogout }) {
   const METRIC_LABEL = { mes:"Mes actual", acum:"Acumulado", prom:"Promedio", pctMes:"% s/ventas (mes)", pctAcum:"% s/ventas (acum)", pct:"% s/ventas" };
   const fmtMetric = (v, isPct)=> v==null ? "—" : (isPct ? pct(v) : money(v));
 
+  /* ----- Datos para Gráficos / Análisis ----- */
+  // Línea de tiempo: referencia (25/26) y luego actual (26/27), cronológico
+  const timeline = useMemo(()=>{
+    const fys = [];
+    const ref = fiscalYears.find(f=>f.id===refFyId);
+    const cur = fiscalYears.find(f=>f.id===currentFyId);
+    if(ref) fys.push(ref);
+    if(cur && cur.id!==ref?.id) fys.push(cur);
+    const out=[];
+    fys.forEach(fy=>{
+      months.filter(m=>m.fiscal_year_id===fy.id).sort((a,b)=>a.order_index-b.order_index)
+        .forEach(m=> out.push({ fy, m, label:`${m.month_name.slice(0,3)} ${String(m.calendar_year).slice(2)}` }));
+    });
+    return out;
+  }, [fiscalYears, refFyId, currentFyId, months]);
+
+  // Valor mensual de una serie: referencia usa lo cargado a mano; actual usa fórmula
+  const seriesMonth = useCallback((fy, name, ord)=>{
+    if(fy.id===refFyId){ const id=byName[name]?.id; return id?catMonth(fy.id,id,ord):0; }
+    return valMonth(fy.id, name, ord);
+  }, [refFyId, byName, catMonth, valMonth]);
+
+  const hasData = useCallback((fy, ord)=>{
+    const mid = months.find(m=>m.fiscal_year_id===fy.id && m.order_index===ord)?.id;
+    if(!mid) return false;
+    if(fy.id===refFyId) return METRICS3.some(mt=>{ const id=byName[mt.name]?.id; return id && values.some(v=>v.month_id===mid && v.category_id===id); });
+    return values.some(v=>v.month_id===mid);
+  }, [months, refFyId, byName, values]);
+
+  const H = {
+    categories, months, fiscalYears, currentFyId, refFyId, order, byName,
+    catMonth, valMonth, valAccum, refAcumVal, refPctVal,
+    timeline, seriesMonth, hasData, monthsCur, fyName, refName,
+  };
+
   /* ----- Exportar a Excel ----- */
   const exportXlsx = () => {
     const data = visibleRows.map(r=>({
@@ -1338,6 +1750,8 @@ function Dashboard({ session, role, onLogout }) {
           <button className={"nav-item"+(view==="ref"?" active":"")} onClick={()=>setView("ref")}>{refName}</button>
           <button className={"nav-item"+(view==="grid"?" active":"")} onClick={()=>setView("grid")}>{fyName}</button>
           <button className={"nav-item"+(view==="compare"?" active":"")} onClick={()=>setView("compare")}>Comparación</button>
+          <button className={"nav-item"+(view==="graphs"?" active":"")} onClick={()=>setView("graphs")}>Gráficos</button>
+          <button className={"nav-item"+(view==="analysis"?" active":"")} onClick={()=>setView("analysis")}>Análisis</button>
           {role==="admin" &&
             <button className={"nav-item"+(view==="config"?" active":"")} onClick={()=>setView("config")}>Configuración</button>}
         </nav>
@@ -1368,6 +1782,16 @@ function Dashboard({ session, role, onLogout }) {
               <div className="tile-ico">📊</div>
               <div className="tile-name">Comparación</div>
               <div className="tile-desc">Comparar mes, promedio o % contra otro ejercicio.</div>
+            </button>
+            <button className="tile" style={{"--tc":"#0ea5a0"}} onClick={()=>setView("graphs")}>
+              <div className="tile-ico">📈</div>
+              <div className="tile-name">Gráficos</div>
+              <div className="tile-desc">Evolución de utilidades con tendencia y proyección.</div>
+            </button>
+            <button className="tile" style={{"--tc":"#d97706"}} onClick={()=>setView("analysis")}>
+              <div className="tile-ico">🔎</div>
+              <div className="tile-name">Análisis</div>
+              <div className="tile-desc">Proyección de cierre, margen y composición de costos.</div>
             </button>
             {role==="admin" &&
               <button className="tile" style={{"--tc":"#7c3aed"}} onClick={()=>setView("config")}>
@@ -1520,9 +1944,13 @@ function Dashboard({ session, role, onLogout }) {
           setCurrentFyId={setCurrentFyId} canEditValues={canEditValues} canEditSubs={canEditSubs}
           reload={loadAll} notify={notify} onBack={()=>setView("home")} />}
 
+       {view==="graphs" && <GraphsView H={H} onBack={()=>setView("home")} />}
+
+       {view==="analysis" && <AnalysisView H={H} onBack={()=>setView("home")} />}
+
        {view==="config" && role==="admin" &&
         <ConfigView categories={categories} subcategories={subcategories} fiscalYears={fiscalYears}
-          profiles={profiles} myEmail={session.user.email}
+          profiles={profiles} myEmail={session.user.email} months={months} values={values} refFyId={refFyId}
           reload={loadAll} notify={notify} onGoReference={()=>setView("ref")} onBack={()=>setView("home")} />}
       </div>
 
