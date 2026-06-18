@@ -272,6 +272,7 @@
   .ai-text{margin-top:10px;border-top:1px solid var(--line);padding-top:12px}
   .ai-h{font-size:14px;font-weight:800;margin:14px 0 4px;color:var(--navy)}
   .ai-p{font-size:13.5px;line-height:1.55;margin:4px 0;color:var(--ink)}
+  td.cell-on{background:#dde9f7;font-weight:700}
   .loading{min-height:100vh;display:grid;place-items:center;color:var(--muted);font-weight:600}
   .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;
     padding:11px 18px;border-radius:10px;font-size:13.5px;font-weight:600;z-index:80;box-shadow:0 10px 30px rgba(0,0,0,.3)}
@@ -365,6 +366,8 @@ const METRICS3 = [
   { name:"Total de Utilidad Neta",          label:"Utilidad Neta",         color:"#0d7a72" },
   { name:"Resultado después del impuesto",  label:"Resultado desp. imp.",  color:"#7c3aed" },
 ];
+// Series que se cargan mes a mes para la referencia 25/26 (ventas para estacionalidad + utilidades)
+const REF_MONTHLY = ["Total de Ventas", ...METRICS3.map(m=>m.name)];
 // Regresión lineal sobre [{x,y}] -> {m,b}
 function linreg(pts){
   const n=pts.length; if(n<2) return null;
@@ -1331,6 +1334,7 @@ function GraphsView({ H, onBack }){
    ============================================================ */
 function AnalysisView({ H, onBack }){
   const { categories, currentFyId, cAccum, cMonth, valMonth, valAccum, cRefAcum, monthsCur, fyName, usd, setCurrency } = H;
+  const [method, setMethod] = useState("lineal"); // lineal | estacional | tendencia
 
   // Último mes con datos del ejercicio actual (independiente del selector de Comparación)
   const curFy = H.fiscalYears.find(f=>f.id===currentFyId);
@@ -1341,12 +1345,29 @@ function AnalysisView({ H, onBack }){
   const ventasAcum = cAccum(currentFyId, "Total de Ventas", lastOrd);
   const ventasAcumP = valAccum(currentFyId, "Total de Ventas", lastOrd); // pesos, para %
 
-  // Proyección de cierre (run-rate) por categoría — en la moneda elegida
+  // ----- Métodos de proyección -----
+  const refW = H.refSalesWeights;
+  const hasSeasonal = !!refW;
+  const elapsedShare = refW ? Object.keys(refW).reduce((s,o)=> Number(o)<=lastOrd ? s+refW[o] : s, 0) : null;
+
+  const projLinear = (name)=> meses>0 ? cAccum(currentFyId,name,lastOrd)/meses*12 : 0;
+  const projSeasonal = (name)=> (elapsedShare && elapsedShare>0) ? cAccum(currentFyId,name,lastOrd)/elapsedShare : projLinear(name);
+  const projTrend = (name)=>{
+    const pts=[]; monthsCur.forEach(m=>{ if(m.order_index<=lastOrd) pts.push({x:m.order_index, y:cMonth(currentFyId,name,m.order_index)}); });
+    if(pts.length<2) return projLinear(name);
+    const lr=linreg(pts); if(!lr) return projLinear(name);
+    let total=0; for(let o=1;o<=12;o++){ total += o<=lastOrd ? cMonth(currentFyId,name,o) : (lr.m*o+lr.b); }
+    return total;
+  };
+  const projBy = (name)=> method==="estacional"?projSeasonal(name) : method==="tendencia"?projTrend(name) : projLinear(name);
+  const METHOD_LABEL = { lineal:"Lineal (run-rate)", estacional:"Estacional (ventas ref.)", tendencia:"Tendencia (regresión)" };
+
+  // Proyección por categoría (en la moneda elegida, con el método elegido)
   const projRows = categories.map(c=>{
     const acum = cAccum(currentFyId, c.name, lastOrd);
-    const proj = meses>0 ? acum/meses*12 : 0;
     const ref  = cRefAcum(c.name);
-    return { c, acum, proj, ref, dif: proj-ref };
+    const proj = projBy(c.name);
+    return { c, acum, ref, proj, dif: proj-ref };
   });
   const keyProj = METRICS3.map(m=> projRows.find(r=>r.c.name===m.name)).filter(Boolean);
 
@@ -1391,12 +1412,13 @@ function AnalysisView({ H, onBack }){
     const L = [];
     const M = (v)=> moneyCur(v, usd);
     L.push(`Moneda del análisis: ${usd?"DÓLARES (cada mes convertido a su cotización de fin de mes)":"PESOS argentinos"}.`);
+    L.push(`Método de proyección activo: ${METHOD_LABEL[method]}.`);
     L.push(`Ejercicio: ${fyName}. Acumulado al último mes cargado: ${lastMonthName}. Meses transcurridos: ${meses}.`);
     L.push(`Ventas acumuladas: ${M(ventasAcum)}.`);
     METRICS3.forEach(mt=>{
       const r = projRows.find(x=>x.c.name===mt.name);
       const margen = ventasAcumP!==0 ? (valAccum(currentFyId,mt.name,lastOrd)/ventasAcumP)*100 : null;
-      L.push(`${mt.label}: acumulado ${M(r.acum)}${margen!=null?` (margen ${pct(margen)})`:""}, proyección de cierre ${M(r.proj)}, referencia acum ${M(r.ref)}.`);
+      L.push(`${mt.label}: acumulado ${M(r.acum)}${margen!=null?` (margen ${pct(margen)})`:""}, referencia cierre ${M(r.ref)}. Proyecciones de cierre — lineal ${M(projLinear(mt.name))}, estacional ${M(projSeasonal(mt.name))}, tendencia ${M(projTrend(mt.name))}.`);
     });
     if(comp.length){
       L.push("Principales costos sobre ventas (acum): " + comp.slice(0,6).map(x=>`${x.c.name} ${pct(x.pct)}`).join("; ") + ".");
@@ -1443,6 +1465,22 @@ function AnalysisView({ H, onBack }){
         </div>
       </div>
 
+      <div className="controls" style={{marginBottom:14}}>
+        <div className="field">
+          <label>Método de proyección</label>
+          <div className="seg">
+            <button className={"seg-btn"+(method==="lineal"?" on":"")} onClick={()=>setMethod("lineal")}>Lineal</button>
+            <button className={"seg-btn"+(method==="estacional"?" on":"")} onClick={()=>setMethod("estacional")}>Estacional</button>
+            <button className={"seg-btn"+(method==="tendencia"?" on":"")} onClick={()=>setMethod("tendencia")}>Tendencia</button>
+          </div>
+        </div>
+        <span style={{fontSize:12.5,color:"var(--muted)",alignSelf:"flex-end",paddingBottom:6}}>
+          {method==="lineal" && "Promedio mensual × 12."}
+          {method==="estacional" && (hasSeasonal ? "Usa el patrón mensual de ventas de la referencia." : "Cargá las ventas mensuales 25/26 en Configuración para activarlo (por ahora = lineal).")}
+          {method==="tendencia" && "Regresión sobre los meses cargados, extrapola los que faltan."}
+        </span>
+      </div>
+
       {/* Cuadro de IA */}
       <div className="ai-card">
         <div className="ai-head">
@@ -1479,6 +1517,39 @@ function AnalysisView({ H, onBack }){
             </div>
           );
         })}
+      </div>
+
+      {/* Comparación de métodos de proyección (las 3 utilidades) */}
+      <div className="panel" style={{marginBottom:18}}>
+        <div className="panel-head"><h2>Proyección de cierre · comparación de métodos</h2>
+          <span className="hint">Acumulado a {lastMonthName}</span></div>
+        <div className="table-scroll">
+          <table>
+            <thead><tr>
+              <th className="left">Métrica</th><th>Acumulado</th>
+              <th>Lineal</th><th>Estacional</th><th>Tendencia</th><th>Referencia (cierre)</th>
+            </tr></thead>
+            <tbody>
+              {METRICS3.map(mt=>{
+                const acum = cAccum(currentFyId, mt.name, lastOrd);
+                const ref  = cRefAcum(mt.name);
+                return (
+                  <tr key={mt.name} className="hi-sub">
+                    <td className="left"><span className="cat-name strong">{mt.label}</span></td>
+                    <td className="num">{moneyCur(acum, usd)}</td>
+                    <td className={"num"+(method==="lineal"?" cell-on":"")}>{moneyCur(projLinear(mt.name), usd)}</td>
+                    <td className={"num"+(method==="estacional"?" cell-on":"")}>{moneyCur(projSeasonal(mt.name), usd)}</td>
+                    <td className={"num"+(method==="tendencia"?" cell-on":"")}>{moneyCur(projTrend(mt.name), usd)}</td>
+                    <td className="num">{moneyCur(ref, usd)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <p style={{fontSize:11.5,color:"var(--muted)",margin:"10px 14px 0"}}>
+          Lineal: promedio × 12 · Estacional: según el peso de cada mes en las ventas de la referencia · Tendencia: regresión de los meses cargados. La columna resaltada es el método activo.
+        </p>
       </div>
 
       {/* Margen % en el tiempo */}
@@ -1527,7 +1598,7 @@ function AnalysisView({ H, onBack }){
       {/* Tabla de proyección completa */}
       <div className="panel" style={{marginTop:18}}>
         <div className="panel-head"><h2>Acumulado actual vs referencia · tendencia de cierre</h2>
-          <span className="hint">Acumulado a {lastMonthName} · proyección = acumulado ÷ {meses} meses × 12</span></div>
+          <span className="hint">Acumulado a {lastMonthName} · proyección: {METHOD_LABEL[method]}</span></div>
         <div className="table-scroll">
           <table>
             <thead><tr>
@@ -1571,7 +1642,7 @@ function AnalysisView({ H, onBack }){
 function RefUtilGrid({ categories, months, values, refFyId, canEdit, reload, notify }){
   const refMonths = months.filter(m=>m.fiscal_year_id===refFyId).sort((a,b)=>a.order_index-b.order_index);
   const byName = {}; categories.forEach(c=>{ byName[c.name]=c; });
-  const metricCats = METRICS3.map(m=>byName[m.name]).filter(Boolean);
+  const metricCats = REF_MONTHLY.map(n=>byName[n]).filter(Boolean);
   const keyOf=(mId,cId)=>`${mId}::${cId}`;
   const init={};
   values.forEach(v=>{
@@ -1600,9 +1671,9 @@ function RefUtilGrid({ categories, months, values, refFyId, canEdit, reload, not
 
   return (
     <section className="cfg-card cfg-wide">
-      <h3>Utilidades mensuales 2025/2026 (para gráficos)</h3>
+      <h3>Carga mensual 2025/2026 (ventas y utilidades)</h3>
       <p style={{fontSize:12.5,color:"var(--muted)",margin:"0 0 10px"}}>
-        Cargá mes a mes solo estas tres líneas del ejercicio de referencia. Se usan para dibujar la curva histórica.
+        Cargá mes a mes estas líneas del ejercicio de referencia. Las ventas se usan para la estacionalidad de las proyecciones, y las utilidades para la curva histórica de los gráficos.
       </p>
       <div className="table-scroll">
         <table className="grid-table">
@@ -1835,6 +1906,17 @@ function Dashboard({ session, role, onLogout }) {
   const cRefAcum = useCallback((name)=>{ const v=refAcumVal(name); if(!usd) return v; const a=avgRate(refFyId); return a?v/a:0; }, [refAcumVal, usd, avgRate, refFyId]);
   const cRefProm = useCallback((name)=>{ const v=refPromVal(name); if(!usd) return v; const a=avgRate(refFyId); return a?v/a:0; }, [refPromVal, usd, avgRate, refFyId]);
 
+  // Estacionalidad: participación de cada mes en las ventas del ejercicio de referencia
+  const refSalesWeights = useMemo(()=>{
+    const id = byName["Total de Ventas"]?.id; if(!id) return null;
+    const ms = months.filter(m=>m.fiscal_year_id===refFyId).sort((a,b)=>a.order_index-b.order_index);
+    const vals = ms.map(m=>{ const row = values.find(v=>v.month_id===m.id && v.category_id===id && v.subcategory_id==null); return row?Number(row.amount||0):0; });
+    const total = vals.reduce((a,b)=>a+b,0);
+    if(total<=0) return null;
+    const w={}; ms.forEach((m,i)=> w[m.order_index] = vals[i]/total);
+    return w;
+  }, [byName, months, refFyId, values]);
+
   const unitOf = (metric)=> (metric==="pctMes"||metric==="pctAcum"||metric==="pct") ? "pct" : "money";
 
   /* ----- Filas (según métricas elegidas) ----- */
@@ -1923,7 +2005,7 @@ function Dashboard({ session, role, onLogout }) {
     categories, months, fiscalYears, currentFyId, refFyId, order, byName,
     catMonth, valMonth, valAccum, cMonth, cAccum, cRefAcum, refAcumVal, refPctVal,
     timeline, seriesMonth, hasData, monthsCur, fyName, refName,
-    currency, usd, setCurrency, avgRate,
+    currency, usd, setCurrency, avgRate, refSalesWeights,
   };
 
   /* ----- Exportar a Excel ----- */
