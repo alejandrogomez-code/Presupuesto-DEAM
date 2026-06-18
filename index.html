@@ -1330,15 +1330,20 @@ function GraphsView({ H, onBack }){
    3g) ANÁLISIS · proyección, margen y composición
    ============================================================ */
 function AnalysisView({ H, onBack }){
-  const { categories, currentFyId, order, cAccum, cMonth, valMonth, valAccum, cRefAcum, monthsCur, fyName, usd, setCurrency } = H;
-  const meses = order; // meses transcurridos = mes seleccionado
+  const { categories, currentFyId, cAccum, cMonth, valMonth, valAccum, cRefAcum, monthsCur, fyName, usd, setCurrency } = H;
 
-  const ventasAcum = cAccum(currentFyId, "Total de Ventas", order);
-  const ventasAcumP = valAccum(currentFyId, "Total de Ventas", order); // pesos, para %
+  // Último mes con datos del ejercicio actual (independiente del selector de Comparación)
+  const curFy = H.fiscalYears.find(f=>f.id===currentFyId);
+  const lastOrd = monthsCur.reduce((mx,m)=> (curFy && H.hasData(curFy, m.order_index)) ? Math.max(mx,m.order_index) : mx, 0);
+  const meses = lastOrd; // meses transcurridos = último mes cargado
+  const lastMonthName = monthsCur.find(m=>m.order_index===lastOrd)?.month_name || "—";
+
+  const ventasAcum = cAccum(currentFyId, "Total de Ventas", lastOrd);
+  const ventasAcumP = valAccum(currentFyId, "Total de Ventas", lastOrd); // pesos, para %
 
   // Proyección de cierre (run-rate) por categoría — en la moneda elegida
   const projRows = categories.map(c=>{
-    const acum = cAccum(currentFyId, c.name, order);
+    const acum = cAccum(currentFyId, c.name, lastOrd);
     const proj = meses>0 ? acum/meses*12 : 0;
     const ref  = cRefAcum(c.name);
     return { c, acum, proj, ref, dif: proj-ref };
@@ -1360,7 +1365,7 @@ function AnalysisView({ H, onBack }){
   // Composición de costos (acum) como % de ventas, egresos+impuestos, top desc (% neutro a moneda)
   const comp = categories
     .filter(c=>(c.type==="egreso"||c.type==="impuesto") && !isCalcName(c.name))
-    .map(c=>{ const a=valAccum(currentFyId,c.name,order); return { c, a, pct: ventasAcumP!==0?(a/ventasAcumP)*100:0 }; })
+    .map(c=>{ const a=valAccum(currentFyId,c.name,lastOrd); return { c, a, pct: ventasAcumP!==0?(a/ventasAcumP)*100:0 }; })
     .sort((x,y)=>y.pct-x.pct);
   const compMax = Math.max(1, ...comp.map(x=>x.pct));
 
@@ -1368,7 +1373,7 @@ function AnalysisView({ H, onBack }){
   const alerts = categories
     .filter(c=>(c.type==="egreso"||c.type==="impuesto") && !isCalcName(c.name))
     .map(c=>{
-      const a=valAccum(currentFyId,c.name,order);
+      const a=valAccum(currentFyId,c.name,lastOrd);
       const cur = ventasAcumP!==0 ? (a/ventasAcumP)*100 : null;
       const ref = H.refPctVal(c.name);
       return { c, cur, ref, dpp: (cur!=null&&ref!=null)? cur-ref : null };
@@ -1386,11 +1391,11 @@ function AnalysisView({ H, onBack }){
     const L = [];
     const M = (v)=> moneyCur(v, usd);
     L.push(`Moneda del análisis: ${usd?"DÓLARES (cada mes convertido a su cotización de fin de mes)":"PESOS argentinos"}.`);
-    L.push(`Ejercicio: ${fyName}. Mes seleccionado: ${H.monthsCur.find(m=>m.order_index===order)?.month_name||"-"}. Meses transcurridos: ${meses}.`);
+    L.push(`Ejercicio: ${fyName}. Acumulado al último mes cargado: ${lastMonthName}. Meses transcurridos: ${meses}.`);
     L.push(`Ventas acumuladas: ${M(ventasAcum)}.`);
     METRICS3.forEach(mt=>{
       const r = projRows.find(x=>x.c.name===mt.name);
-      const margen = ventasAcumP!==0 ? (valAccum(currentFyId,mt.name,order)/ventasAcumP)*100 : null;
+      const margen = ventasAcumP!==0 ? (valAccum(currentFyId,mt.name,lastOrd)/ventasAcumP)*100 : null;
       L.push(`${mt.label}: acumulado ${M(r.acum)}${margen!=null?` (margen ${pct(margen)})`:""}, proyección de cierre ${M(r.proj)}, referencia acum ${M(r.ref)}.`);
     });
     if(comp.length){
@@ -1430,7 +1435,7 @@ function AnalysisView({ H, onBack }){
         <button className="back-btn" onClick={onBack}>← Inicio</button>
         <div>
           <h1 className="section-title">Análisis</h1>
-          <p className="section-sub">Proyección de cierre, margen en el tiempo y composición de costos · {fyName}</p>
+          <p className="section-sub">Acumulado del ejercicio al último mes cargado ({lastMonthName}) vs referencia · {fyName}</p>
         </div>
         <div className="seg" style={{marginLeft:"auto"}}>
           <button className={"seg-btn"+(!usd?" on":"")} onClick={()=>setCurrency("ars")}>Pesos</button>
@@ -1521,27 +1526,34 @@ function AnalysisView({ H, onBack }){
 
       {/* Tabla de proyección completa */}
       <div className="panel" style={{marginTop:18}}>
-        <div className="panel-head"><h2>Proyección de cierre por categoría</h2>
-          <span className="hint">Run-rate: acumulado ÷ {meses} meses × 12</span></div>
+        <div className="panel-head"><h2>Acumulado actual vs referencia · tendencia de cierre</h2>
+          <span className="hint">Acumulado a {lastMonthName} · proyección = acumulado ÷ {meses} meses × 12</span></div>
         <div className="table-scroll">
           <table>
             <thead><tr>
-              <th className="left">Categoría</th><th>Acumulado</th><th>Proyección anual</th>
-              <th>Referencia (acum)</th><th>Dif. proyección</th>
+              <th className="left">Categoría</th>
+              <th>Acumulado actual</th>
+              <th>Acum. referencia</th>
+              <th>Dif. acumulado</th>
+              <th>Proyección cierre</th>
+              <th>Dif. proyección</th>
             </tr></thead>
             <tbody>
               {projRows.map(r=>{
                 const hi=HILITE[r.c.name];
-                const fav = goodIfUp(r.c.type) ? r.dif>=0 : r.dif<=0;
+                const difAcum = r.acum - r.ref;
+                const favA = goodIfUp(r.c.type) ? difAcum>=0 : difAcum<=0;
+                const favP = goodIfUp(r.c.type) ? r.dif>=0 : r.dif<=0;
                 return (
                   <tr key={r.c.id} className={hi||""}>
                     <td className="left"><div className="cat-cell">
                       <span className="type-bar" style={{background:TYPE_COLOR[r.c.type]}}></span>
                       <span className={"cat-name"+(hi==="hi-key"?" strong":"")}>{r.c.name}</span></div></td>
                     <td className="num">{moneyCur(r.acum, usd)}</td>
-                    <td className="num">{moneyCur(r.proj, usd)}</td>
                     <td className="num">{moneyCur(r.ref, usd)}</td>
-                    <td className={"num diff "+(r.dif===0?"":(fav?"pos":"neg"))}>{r.dif>0?"+":""}{moneyCur(r.dif, usd)}</td>
+                    <td className={"num diff "+(difAcum===0?"":(favA?"pos":"neg"))}>{difAcum>0?"+":""}{moneyCur(difAcum, usd)}</td>
+                    <td className="num">{moneyCur(r.proj, usd)}</td>
+                    <td className={"num diff "+(r.dif===0?"":(favP?"pos":"neg"))}>{r.dif>0?"+":""}{moneyCur(r.dif, usd)}</td>
                   </tr>
                 );
               })}
