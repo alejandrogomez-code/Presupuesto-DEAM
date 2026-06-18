@@ -1348,27 +1348,28 @@ function AnalysisView({ H, onBack }){
   // ----- Métodos de proyección -----
   const refW = H.refSalesWeights;
   const hasSeasonal = !!refW;
-  const elapsedShare = refW ? Object.keys(refW).reduce((s,o)=> Number(o)<=lastOrd ? s+refW[o] : s, 0) : null;
 
   const projLinear = (name)=> meses>0 ? cAccum(currentFyId,name,lastOrd)/meses*12 : 0;
-  const projSeasonal = (name)=> (elapsedShare && elapsedShare>0) ? cAccum(currentFyId,name,lastOrd)/elapsedShare : projLinear(name);
+  const projSeasonal = (name)=>{
+    // 1º patrón propio de la categoría en el año anterior; 2º patrón de ventas; 3º lineal
+    const w = H.refWeights(name) || H.refSalesWeights;
+    if(!w) return projLinear(name);
+    const share = Object.keys(w).reduce((s,o)=> Number(o)<=lastOrd ? s+w[o] : s, 0);
+    return share>0 ? cAccum(currentFyId,name,lastOrd)/share : projLinear(name);
+  };
   const projTrend = (name)=>{
-    const cat = H.byName[name];
-    const canBeNeg = cat && cat.type==="resultado"; // resultados pueden ser negativos; ventas/gastos/impuestos no
-    // Regresión SOLO sobre meses con datos cargados (evita que los meses vacíos = 0 tuerzan la pendiente)
-    const pts=[];
-    monthsCur.forEach(m=>{ if(m.order_index<=lastOrd && curFy && H.hasData(curFy, m.order_index)) pts.push({x:m.order_index, y:cMonth(currentFyId,name,m.order_index)}); });
-    if(pts.length<2) return projLinear(name);
-    const lr=linreg(pts); if(!lr) return projLinear(name);
-    let total=0;
-    for(let o=1;o<=12;o++){
-      if(o<=lastOrd){ total += cMonth(currentFyId,name,o); }
-      else { let f = lr.m*o + lr.b; if(!canBeNeg) f = Math.max(0, f); total += f; }
-    }
-    return total;
+    // Tendencia robusta: ritmo de los últimos meses cargados anualizado
+    const loaded = monthsCur
+      .filter(m=> m.order_index<=lastOrd && curFy && H.hasData(curFy, m.order_index))
+      .map(m=>m.order_index).sort((a,b)=>a-b);
+    if(loaded.length===0) return projLinear(name);
+    const recent = loaded.slice(-3); // últimos 3 meses con datos
+    const recentAvg = recent.reduce((s,o)=> s + cMonth(currentFyId,name,o), 0) / recent.length;
+    const acum = cAccum(currentFyId, name, lastOrd);
+    return acum + recentAvg * (12 - lastOrd);
   };
   const projBy = (name)=> method==="estacional"?projSeasonal(name) : method==="tendencia"?projTrend(name) : projLinear(name);
-  const METHOD_LABEL = { lineal:"Lineal (run-rate)", estacional:"Estacional (ventas ref.)", tendencia:"Tendencia (regresión)" };
+  const METHOD_LABEL = { lineal:"Lineal (run-rate)", estacional:"Estacional (ventas ref.)", tendencia:"Tendencia (meses recientes)" };
 
   // Proyección por categoría (en la moneda elegida, con el método elegido)
   const projRows = categories.map(c=>{
@@ -1484,8 +1485,10 @@ function AnalysisView({ H, onBack }){
         </div>
         <span style={{fontSize:12.5,color:"var(--muted)",alignSelf:"flex-end",paddingBottom:6}}>
           {method==="lineal" && "Promedio mensual × 12."}
-          {method==="estacional" && (hasSeasonal ? "Usa el patrón mensual de ventas de la referencia." : "Cargá las ventas mensuales 25/26 en Configuración para activarlo (por ahora = lineal).")}
-          {method==="tendencia" && "Regresión sobre los meses cargados, extrapola los que faltan."}
+          {method==="estacional" && (hasSeasonal
+            ? "Cada categoría usa su patrón mensual del ejercicio anterior (o el de ventas si no tiene propio)."
+            : "Inactivo: cargá las ventas mensuales 2025/2026 en Configuración para activar la estacionalidad (por ahora = lineal).")}
+          {method==="tendencia" && "Anualiza el ritmo de los últimos meses cargados (acumulado + promedio reciente × meses restantes)."}
         </span>
       </div>
 
@@ -1538,7 +1541,7 @@ function AnalysisView({ H, onBack }){
               <th>Lineal</th><th>Estacional</th><th>Tendencia</th><th>Referencia (cierre)</th>
             </tr></thead>
             <tbody>
-              {METRICS3.map(mt=>{
+              {[{name:"Total de Ventas", label:"Total de Ventas"}, ...METRICS3].map(mt=>{
                 const acum = cAccum(currentFyId, mt.name, lastOrd);
                 const ref  = cRefAcum(mt.name);
                 return (
@@ -1556,7 +1559,7 @@ function AnalysisView({ H, onBack }){
           </table>
         </div>
         <p style={{fontSize:11.5,color:"var(--muted)",margin:"10px 14px 0"}}>
-          Lineal: promedio × 12 · Estacional: según el peso de cada mes en las ventas de la referencia · Tendencia: regresión de los meses cargados. La columna resaltada es el método activo.
+          Lineal: promedio × 12 · Estacional: según el peso de cada mes en las ventas de la referencia · Tendencia: ritmo de los últimos meses anualizado. La columna resaltada es el método activo.
         </p>
       </div>
 
@@ -1925,6 +1928,17 @@ function Dashboard({ session, role, onLogout }) {
     return w;
   }, [byName, months, refFyId, values]);
 
+  // Estacionalidad propia de cada categoría según su patrón mensual en el ejercicio anterior
+  const refWeights = useCallback((name)=>{
+    const id = byName[name]?.id; if(!id) return null;
+    const ms = months.filter(m=>m.fiscal_year_id===refFyId).sort((a,b)=>a.order_index-b.order_index);
+    const vals = ms.map(m=> catMonth(refFyId, id, m.order_index));
+    const total = vals.reduce((a,b)=>a+b,0);
+    if(total<=0) return null;
+    const w={}; ms.forEach((m,i)=> w[m.order_index] = vals[i]/total);
+    return w;
+  }, [byName, months, refFyId, catMonth]);
+
   const unitOf = (metric)=> (metric==="pctMes"||metric==="pctAcum"||metric==="pct") ? "pct" : "money";
 
   /* ----- Filas (según métricas elegidas) ----- */
@@ -2013,7 +2027,7 @@ function Dashboard({ session, role, onLogout }) {
     categories, months, fiscalYears, currentFyId, refFyId, order, byName,
     catMonth, valMonth, valAccum, cMonth, cAccum, cRefAcum, refAcumVal, refPctVal,
     timeline, seriesMonth, hasData, monthsCur, fyName, refName,
-    currency, usd, setCurrency, avgRate, refSalesWeights,
+    currency, usd, setCurrency, avgRate, refSalesWeights, refWeights,
   };
 
   /* ----- Exportar a Excel ----- */
