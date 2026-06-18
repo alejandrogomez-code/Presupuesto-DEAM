@@ -1353,10 +1353,18 @@ function AnalysisView({ H, onBack }){
   const projLinear = (name)=> meses>0 ? cAccum(currentFyId,name,lastOrd)/meses*12 : 0;
   const projSeasonal = (name)=> (elapsedShare && elapsedShare>0) ? cAccum(currentFyId,name,lastOrd)/elapsedShare : projLinear(name);
   const projTrend = (name)=>{
-    const pts=[]; monthsCur.forEach(m=>{ if(m.order_index<=lastOrd) pts.push({x:m.order_index, y:cMonth(currentFyId,name,m.order_index)}); });
+    const cat = H.byName[name];
+    const canBeNeg = cat && cat.type==="resultado"; // resultados pueden ser negativos; ventas/gastos/impuestos no
+    // Regresión SOLO sobre meses con datos cargados (evita que los meses vacíos = 0 tuerzan la pendiente)
+    const pts=[];
+    monthsCur.forEach(m=>{ if(m.order_index<=lastOrd && curFy && H.hasData(curFy, m.order_index)) pts.push({x:m.order_index, y:cMonth(currentFyId,name,m.order_index)}); });
     if(pts.length<2) return projLinear(name);
     const lr=linreg(pts); if(!lr) return projLinear(name);
-    let total=0; for(let o=1;o<=12;o++){ total += o<=lastOrd ? cMonth(currentFyId,name,o) : (lr.m*o+lr.b); }
+    let total=0;
+    for(let o=1;o<=12;o++){
+      if(o<=lastOrd){ total += cMonth(currentFyId,name,o); }
+      else { let f = lr.m*o + lr.b; if(!canBeNeg) f = Math.max(0, f); total += f; }
+    }
     return total;
   };
   const projBy = (name)=> method==="estacional"?projSeasonal(name) : method==="tendencia"?projTrend(name) : projLinear(name);
