@@ -318,6 +318,10 @@ const SUPERADMINS = ["alejandro.gomez@deam.com.ar"];
 const money = (n) =>
   (n == null || isNaN(n)) ? "—" :
   new Intl.NumberFormat("es-AR", { style:"currency", currency:"ARS", minimumFractionDigits:2, maximumFractionDigits:2 }).format(n);
+const usdMoney = (n) =>
+  (n == null || isNaN(n)) ? "—" :
+  "US$ " + new Intl.NumberFormat("es-AR", { minimumFractionDigits:2, maximumFractionDigits:2 }).format(n);
+const moneyCur = (n, usd)=> usd ? usdMoney(n) : money(n);
 const pct = (n) => (n == null || isNaN(n) || !isFinite(n)) ? "—" :
   new Intl.NumberFormat("es-AR", { minimumFractionDigits:2, maximumFractionDigits:2 }).format(n) + "%";
 const TYPE_COLOR = { ingreso:"var(--t-ingreso)", egreso:"var(--t-egreso)", impuesto:"var(--t-impuesto)", resultado:"var(--t-resultado)" };
@@ -370,11 +374,11 @@ function linreg(pts){
   const m=(n*sxy-sx*sy)/d; return { m, b:(sy-m*sx)/n };
 }
 // Eje compacto para montos grandes
-const compactMoney = (v)=>{ const a=Math.abs(v);
-  if(a>=1e9) return "$"+(v/1e9).toLocaleString("es-AR",{maximumFractionDigits:1})+"MM";
-  if(a>=1e6) return "$"+(v/1e6).toLocaleString("es-AR",{maximumFractionDigits:1})+"M";
-  if(a>=1e3) return "$"+(v/1e3).toLocaleString("es-AR",{maximumFractionDigits:0})+"k";
-  return "$"+v; };
+const compactMoney = (v, usd)=>{ const a=Math.abs(v); const s=usd?"US$":"$";
+  if(a>=1e9) return s+(v/1e9).toLocaleString("es-AR",{maximumFractionDigits:1})+"MM";
+  if(a>=1e6) return s+(v/1e6).toLocaleString("es-AR",{maximumFractionDigits:1})+"M";
+  if(a>=1e3) return s+(v/1e3).toLocaleString("es-AR",{maximumFractionDigits:0})+"k";
+  return s+v; };
 
 /* Input con formato: muestra $/% cuando no está enfocado, número crudo al editar.
    El valor que sube por onChange siempre es un string numérico plano (punto decimal). */
@@ -1132,6 +1136,9 @@ function ConfigView({ categories, subcategories, fiscalYears, profiles, myEmail,
         <RefUtilGrid categories={categories} months={months} values={values} refFyId={refFyId}
           canEdit={true} reload={reload} notify={notify} />
 
+        {/* Cotización del dólar por mes */}
+        <UsdRateGrid fiscalYears={fiscalYears} months={months} canEdit={true} reload={reload} notify={notify} />
+
         {/* Ejercicios */}
         <section className="cfg-card">
           <h3>Ejercicios</h3>
@@ -1205,13 +1212,13 @@ function ConfigView({ categories, subcategories, fiscalYears, profiles, myEmail,
 /* ============================================================
    3e) Wrapper de Chart.js
    ============================================================ */
-function LineChart({ labels, datasets, height=360, yIsPct=false }){
+function LineChart({ labels, datasets, height=360, yIsPct=false, usd=false }){
   const canRef = React.useRef(null);
   const chRef  = React.useRef(null);
   useEffect(()=>{
     if(!canRef.current || !window.Chart) return;
     if(chRef.current) chRef.current.destroy();
-    const fmt = (v)=> v==null?"—":(yIsPct?pct(v):money(v));
+    const fmt = (v)=> v==null?"—":(yIsPct?pct(v):moneyCur(v,usd));
     chRef.current = new Chart(canRef.current, {
       type:"line",
       data:{ labels, datasets },
@@ -1225,12 +1232,12 @@ function LineChart({ labels, datasets, height=360, yIsPct=false }){
         scales:{
           x:{ grid:{ display:false }, ticks:{ font:{ family:"Inter", size:11 }, maxRotation:0, autoSkip:true, maxTicksLimit:14 } },
           y:{ grid:{ color:"#eef2f7" }, ticks:{ font:{ family:"Inter", size:11 },
-              callback:(v)=> yIsPct?`${v}%`:compactMoney(v) } }
+              callback:(v)=> yIsPct?`${v}%`:compactMoney(v,usd) } }
         }
       }
     });
     return ()=>{ if(chRef.current){ chRef.current.destroy(); chRef.current=null; } };
-  }, [labels, datasets, yIsPct, height]);
+  }, [labels, datasets, yIsPct, height, usd]);
   return <div style={{height}}><canvas ref={canRef}></canvas></div>;
 }
 
@@ -1242,7 +1249,7 @@ function GraphsView({ H, onBack }){
   const [pick, setPick]   = useState(METRICS3[0].name);
   const [acum, setAcum]   = useState(false);      // mensual | acumulado
 
-  const { timeline, seriesMonth, hasData } = H;
+  const { timeline, seriesMonth, hasData, usd, setCurrency } = H;
 
   // valores por serie a lo largo del timeline (null cuando no hay datos)
   const seriesData = (name)=>{
@@ -1302,10 +1309,14 @@ function GraphsView({ H, onBack }){
           <button className={"seg-btn"+(!acum?" on":"")} onClick={()=>setAcum(false)}>Mensual</button>
           <button className={"seg-btn"+(acum?" on":"")} onClick={()=>setAcum(true)}>Acumulado</button>
         </div>
+        <div className="seg">
+          <button className={"seg-btn"+(!usd?" on":"")} onClick={()=>setCurrency("ars")}>Pesos</button>
+          <button className={"seg-btn"+(usd?" on":"")} onClick={()=>setCurrency("usd")}>Dólares</button>
+        </div>
       </div>
 
       <div className="panel" style={{padding:18}}>
-        <LineChart labels={labels} datasets={datasets} height={420} />
+        <LineChart labels={labels} datasets={datasets} height={420} usd={usd} />
       </div>
       <p style={{fontSize:12,color:"var(--muted)",marginTop:10}}>
         2025/2026 usa los valores mensuales cargados en Configuración; 2026/2027 se calcula desde los datos del mes.
@@ -1319,21 +1330,22 @@ function GraphsView({ H, onBack }){
    3g) ANÁLISIS · proyección, margen y composición
    ============================================================ */
 function AnalysisView({ H, onBack }){
-  const { categories, currentFyId, order, valAccum, valMonth, refAcumVal, monthsCur, fyName } = H;
+  const { categories, currentFyId, order, cAccum, cMonth, valMonth, valAccum, cRefAcum, monthsCur, fyName, usd, setCurrency } = H;
   const meses = order; // meses transcurridos = mes seleccionado
 
-  const ventasAcum = valAccum(currentFyId, "Total de Ventas", order);
+  const ventasAcum = cAccum(currentFyId, "Total de Ventas", order);
+  const ventasAcumP = valAccum(currentFyId, "Total de Ventas", order); // pesos, para %
 
-  // Proyección de cierre (run-rate) por categoría
+  // Proyección de cierre (run-rate) por categoría — en la moneda elegida
   const projRows = categories.map(c=>{
-    const acum = valAccum(currentFyId, c.name, order);
+    const acum = cAccum(currentFyId, c.name, order);
     const proj = meses>0 ? acum/meses*12 : 0;
-    const ref  = refAcumVal(c.name);
+    const ref  = cRefAcum(c.name);
     return { c, acum, proj, ref, dif: proj-ref };
   });
   const keyProj = METRICS3.map(m=> projRows.find(r=>r.c.name===m.name)).filter(Boolean);
 
-  // Margen % en el tiempo (ejercicio actual)
+  // Margen % en el tiempo (ejercicio actual) — % es neutro a la moneda
   const marginLabels = monthsCur.map(m=>`${m.month_name.slice(0,3)} ${String(m.calendar_year).slice(2)}`);
   const marginDatasets = METRICS3.map(mt=>({
     label:mt.label,
@@ -1345,10 +1357,10 @@ function AnalysisView({ H, onBack }){
     borderColor:mt.color, backgroundColor:mt.color+"22", tension:0.4, pointRadius:2, borderWidth:2.5, fill:false,
   }));
 
-  // Composición de costos (acum) como % de ventas, egresos+impuestos, top desc
+  // Composición de costos (acum) como % de ventas, egresos+impuestos, top desc (% neutro a moneda)
   const comp = categories
     .filter(c=>(c.type==="egreso"||c.type==="impuesto") && !isCalcName(c.name))
-    .map(c=>{ const a=valAccum(currentFyId,c.name,order); return { c, a, pct: ventasAcum!==0?(a/ventasAcum)*100:0 }; })
+    .map(c=>{ const a=valAccum(currentFyId,c.name,order); return { c, a, pct: ventasAcumP!==0?(a/ventasAcumP)*100:0 }; })
     .sort((x,y)=>y.pct-x.pct);
   const compMax = Math.max(1, ...comp.map(x=>x.pct));
 
@@ -1357,7 +1369,7 @@ function AnalysisView({ H, onBack }){
     .filter(c=>(c.type==="egreso"||c.type==="impuesto") && !isCalcName(c.name))
     .map(c=>{
       const a=valAccum(currentFyId,c.name,order);
-      const cur = ventasAcum!==0 ? (a/ventasAcum)*100 : null;
+      const cur = ventasAcumP!==0 ? (a/ventasAcumP)*100 : null;
       const ref = H.refPctVal(c.name);
       return { c, cur, ref, dpp: (cur!=null&&ref!=null)? cur-ref : null };
     })
@@ -1372,12 +1384,14 @@ function AnalysisView({ H, onBack }){
 
   const buildSummary = ()=>{
     const L = [];
+    const M = (v)=> moneyCur(v, usd);
+    L.push(`Moneda del análisis: ${usd?"DÓLARES (cada mes convertido a su cotización de fin de mes)":"PESOS argentinos"}.`);
     L.push(`Ejercicio: ${fyName}. Mes seleccionado: ${H.monthsCur.find(m=>m.order_index===order)?.month_name||"-"}. Meses transcurridos: ${meses}.`);
-    L.push(`Ventas acumuladas: ${money(ventasAcum)}.`);
+    L.push(`Ventas acumuladas: ${M(ventasAcum)}.`);
     METRICS3.forEach(mt=>{
       const r = projRows.find(x=>x.c.name===mt.name);
-      const margen = ventasAcum!==0 ? (r.acum/ventasAcum)*100 : null;
-      L.push(`${mt.label}: acumulado ${money(r.acum)}${margen!=null?` (margen ${pct(margen)})`:""}, proyección de cierre ${money(r.proj)}, referencia acum ${money(r.ref)}.`);
+      const margen = ventasAcumP!==0 ? (valAccum(currentFyId,mt.name,order)/ventasAcumP)*100 : null;
+      L.push(`${mt.label}: acumulado ${M(r.acum)}${margen!=null?` (margen ${pct(margen)})`:""}, proyección de cierre ${M(r.proj)}, referencia acum ${M(r.ref)}.`);
     });
     if(comp.length){
       L.push("Principales costos sobre ventas (acum): " + comp.slice(0,6).map(x=>`${x.c.name} ${pct(x.pct)}`).join("; ") + ".");
@@ -1385,12 +1399,11 @@ function AnalysisView({ H, onBack }){
     if(alerts.length){
       L.push("Desvíos vs referencia (p.p.): " + alerts.map(a=>`${a.c.name} ${a.dpp>0?"+":""}${pct(a.dpp)}`).join("; ") + ".");
     }
-    // Evolución mensual de las utilidades (actual)
     METRICS3.forEach(mt=>{
       const serie = monthsCur
         .filter(m=> valMonth(currentFyId,"Total de Ventas",m.order_index)!==0 || valMonth(currentFyId,mt.name,m.order_index)!==0)
-        .map(m=> `${m.month_name.slice(0,3)}=${Math.round(valMonth(currentFyId,mt.name,m.order_index))}`);
-      if(serie.length) L.push(`${mt.label} por mes: ${serie.join(", ")}.`);
+        .map(m=> `${m.month_name.slice(0,3)}=${Math.round(cMonth(currentFyId,mt.name,m.order_index))}`);
+      if(serie.length) L.push(`${mt.label} por mes (${usd?"USD":"ARS"}): ${serie.join(", ")}.`);
     });
     return L.join("\n");
   };
@@ -1418,6 +1431,10 @@ function AnalysisView({ H, onBack }){
         <div>
           <h1 className="section-title">Análisis</h1>
           <p className="section-sub">Proyección de cierre, margen en el tiempo y composición de costos · {fyName}</p>
+        </div>
+        <div className="seg" style={{marginLeft:"auto"}}>
+          <button className={"seg-btn"+(!usd?" on":"")} onClick={()=>setCurrency("ars")}>Pesos</button>
+          <button className={"seg-btn"+(usd?" on":"")} onClick={()=>setCurrency("usd")}>Dólares</button>
         </div>
       </div>
 
@@ -1449,9 +1466,9 @@ function AnalysisView({ H, onBack }){
           return (
             <div className="kpi" key={r.c.id} style={{"--accent":"var(--navy)"}}>
               <div className="k-label">{r.c.name} · proyección</div>
-              <div className="k-val num">{money(r.proj)}</div>
+              <div className="k-val num">{moneyCur(r.proj, usd)}</div>
               <div className="k-sub">
-                <span className={"delta "+(fav?"pos":"neg")}>{fav?"▲":"▼"} {money(Math.abs(r.dif))}</span>
+                <span className={"delta "+(fav?"pos":"neg")}>{fav?"▲":"▼"} {moneyCur(Math.abs(r.dif), usd)}</span>
                 <span>vs ref. acum</span>
               </div>
             </div>
@@ -1521,10 +1538,10 @@ function AnalysisView({ H, onBack }){
                     <td className="left"><div className="cat-cell">
                       <span className="type-bar" style={{background:TYPE_COLOR[r.c.type]}}></span>
                       <span className={"cat-name"+(hi==="hi-key"?" strong":"")}>{r.c.name}</span></div></td>
-                    <td className="num">{money(r.acum)}</td>
-                    <td className="num">{money(r.proj)}</td>
-                    <td className="num">{money(r.ref)}</td>
-                    <td className={"num diff "+(r.dif===0?"":(fav?"pos":"neg"))}>{r.dif>0?"+":""}{money(r.dif)}</td>
+                    <td className="num">{moneyCur(r.acum, usd)}</td>
+                    <td className="num">{moneyCur(r.proj, usd)}</td>
+                    <td className="num">{moneyCur(r.ref, usd)}</td>
+                    <td className={"num diff "+(r.dif===0?"":(fav?"pos":"neg"))}>{r.dif>0?"+":""}{moneyCur(r.dif, usd)}</td>
                   </tr>
                 );
               })}
@@ -1602,6 +1619,66 @@ function RefUtilGrid({ categories, months, values, refFyId, canEdit, reload, not
 }
 
 /* ============================================================
+   3i) Cotización del dólar (fin de mes) por mes
+   ============================================================ */
+function UsdRateGrid({ fiscalYears, months, canEdit, reload, notify }){
+  const orders = [1,2,3,4,5,6,7,8,9,10,11,12];
+  const monthAt = (fyId, ord)=> months.find(m=>m.fiscal_year_id===fyId && m.order_index===ord);
+  const init={};
+  months.forEach(m=>{ if(m.usd_rate!=null) init[m.id]=String(m.usd_rate); });
+  const [cells,setCells]=useState(init);
+  const [dirty,setDirty]=useState(()=>new Set());
+  const [busy,setBusy]=useState(false);
+  const setCell=(id,val)=>{ setCells(c=>({...c,[id]:val})); setDirty(d=>{const n=new Set(d);n.add(id);return n;}); };
+
+  const save=async()=>{
+    setBusy(true);
+    for(const id of dirty){
+      const raw=cells[id];
+      const val = (raw===""||isNaN(parseFloat(raw))) ? null : parseFloat(raw);
+      const { error } = await sb.from("months").update({ usd_rate: val }).eq("id", id);
+      if(error){ notify("Error al guardar la cotización."); setBusy(false); return; }
+    }
+    setBusy(false); notify("Cotizaciones guardadas."); reload();
+  };
+
+  const labelOrder = (ord)=>{ const m = months.find(x=>x.order_index===ord); return m?m.month_name.slice(0,3):ord; };
+
+  return (
+    <section className="cfg-card cfg-wide">
+      <h3>Cotización del dólar (fin de mes)</h3>
+      <p style={{fontSize:12.5,color:"var(--muted)",margin:"0 0 10px"}}>
+        Cargá el valor del dólar al cierre de cada mes. Se usa para ver comparativos, gráficos y análisis en dólares.
+      </p>
+      <div className="table-scroll">
+        <table className="grid-table">
+          <thead><tr><th className="left sticky-col">Ejercicio</th>
+            {orders.map(o=><th key={o}>{labelOrder(o)}</th>)}</tr></thead>
+          <tbody>
+            {fiscalYears.map(fy=>(
+              <tr key={fy.id} className="grid-cat-row">
+                <td className="left sticky-col"><span className="cat-name">{fy.name}</span></td>
+                {orders.map(o=>{ const m=monthAt(fy.id,o); return (
+                  <td key={o} className="num">
+                    {m
+                      ? <FmtInput className="cell num" kind="money" disabled={!canEdit} placeholder="$ 0,00"
+                          value={cells[m.id]??""} onChange={v=>setCell(m.id,v)} />
+                      : <span style={{color:"var(--muted)"}}>—</span>}
+                  </td>
+                ); })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {canEdit &&
+        <button className="btn btn-teal" style={{marginTop:12}} onClick={save} disabled={busy||dirty.size===0}>
+          {busy?"Guardando…":`Guardar${dirty.size?` (${dirty.size})`:""}`}</button>}
+    </section>
+  );
+}
+
+/* ============================================================
    4) DASHBOARD
    ============================================================ */
 function Dashboard({ session, role, onLogout }) {
@@ -1623,6 +1700,7 @@ function Dashboard({ session, role, onLogout }) {
   const [metricRef, setMetricRef]       = useState("acum");   // acum|prom|pct
   const [rowFilter, setRowFilter]       = useState("all");    // all|key|ingreso|egreso|impuesto
   const [search, setSearch]             = useState("");
+  const [currency, setCurrency]         = useState("ars");    // ars | usd
   const [toast, setToast]     = useState("");
 
   const canEditValues = role==="admin" || role==="carga";
@@ -1696,7 +1774,33 @@ function Dashboard({ session, role, onLogout }) {
     return evalByName(name, (n)=>{ const id=byName[n]?.id; return id?catAccum(fyId,id,ord):0; }, {});
   }, [byName, catAccum]);
 
-  const ventasMonthCur = valMonth(currentFyId, "Total de Ventas", order);
+  /* ----- Cotización del dólar (fin de mes) y conversión ----- */
+  const usd = currency==="usd";
+  const monthRate = useCallback((fyId, ord)=>{
+    const m = months.find(x=>x.fiscal_year_id===fyId && x.order_index===ord);
+    return m && m.usd_rate ? Number(m.usd_rate) : null;
+  }, [months]);
+  const avgRate = useCallback((fyId)=>{
+    const rs = months.filter(m=>m.fiscal_year_id===fyId && m.usd_rate).map(m=>Number(m.usd_rate));
+    return rs.length ? rs.reduce((a,b)=>a+b,0)/rs.length : null;
+  }, [months]);
+  const invRate = useCallback((fyId, ord)=>{
+    const r = monthRate(fyId,ord) || avgRate(fyId);
+    return (r && r>0) ? 1/r : null;
+  }, [monthRate, avgRate]);
+
+  // Valor mensual/acumulado en la moneda elegida (USD = cada mes a su cotización)
+  const cMonth = useCallback((fyId,name,ord)=>{
+    const p = valMonth(fyId,name,ord);
+    if(!usd) return p;
+    const k = invRate(fyId,ord); return k!=null ? p*k : 0;
+  }, [valMonth, usd, invRate]);
+  const cAccum = useCallback((fyId,name,ord)=>{
+    if(!usd) return valAccum(fyId,name,ord);
+    let t=0; for(let o=1;o<=ord;o++){ const k=invRate(fyId,o); if(k!=null) t+=valMonth(fyId,name,o)*k; } return t;
+  }, [valAccum, valMonth, usd, invRate]);
+
+  const ventasMonthCur = valMonth(currentFyId, "Total de Ventas", order); // pesos (para %)
   const ventasAccumCur = valAccum(currentFyId, "Total de Ventas", order);
 
   // Referencia fija por categoría (acumulado, promedio, % s/ventas)
@@ -1715,18 +1819,24 @@ function Dashboard({ session, role, onLogout }) {
     if(r && r.pct_sales!=null) return Number(r.pct_sales);
     return refVentasAcum!==0 ? (refAcumVal(name)/refVentasAcum)*100 : null;
   }, [byName, refMap, refAcumVal, refVentasAcum]);
+  // Referencia convertida a la moneda elegida (con cotización promedio del ejercicio de referencia)
+  const cRefAcum = useCallback((name)=>{ const v=refAcumVal(name); if(!usd) return v; const a=avgRate(refFyId); return a?v/a:0; }, [refAcumVal, usd, avgRate, refFyId]);
+  const cRefProm = useCallback((name)=>{ const v=refPromVal(name); if(!usd) return v; const a=avgRate(refFyId); return a?v/a:0; }, [refPromVal, usd, avgRate, refFyId]);
 
   const unitOf = (metric)=> (metric==="pctMes"||metric==="pctAcum"||metric==="pct") ? "pct" : "money";
 
   /* ----- Filas (según métricas elegidas) ----- */
   const rows = useMemo(()=> categories.map(cat=>{
     const name = cat.name;
-    const mes  = valMonth(currentFyId, name, order);
-    const acum = valAccum(currentFyId, name, order);
+    const mes  = cMonth(currentFyId, name, order);
+    const acum = cAccum(currentFyId, name, order);
     const prom = order>0 ? acum/order : 0;
-    const pctMes  = ventasMonthCur!==0 ? (mes/ventasMonthCur)*100 : null;
-    const pctAcum = ventasAccumCur!==0 ? (acum/ventasAccumCur)*100 : null;
-    const rAcum = refAcumVal(name), rProm = refPromVal(name), rPct = refPctVal(name);
+    // % siempre sobre pesos (es un ratio, no depende de la moneda)
+    const mesP  = valMonth(currentFyId, name, order);
+    const acumP = valAccum(currentFyId, name, order);
+    const pctMes  = ventasMonthCur!==0 ? (mesP/ventasMonthCur)*100 : null;
+    const pctAcum = ventasAccumCur!==0 ? (acumP/ventasAccumCur)*100 : null;
+    const rAcum = cRefAcum(name), rProm = cRefProm(name), rPct = refPctVal(name);
 
     const actualVal = metricActual==="mes"?mes : metricActual==="acum"?acum :
                       metricActual==="prom"?prom : metricActual==="pctMes"?pctMes : pctAcum;
@@ -1741,8 +1851,8 @@ function Dashboard({ session, role, onLogout }) {
     return { cat, actualVal, refVal, difVal, difPct, comparable,
              actualIsPct:unitOf(metricActual)==="pct", refIsPct:unitOf(metricRef)==="pct",
              mes, acum, prom, pctMes, pctAcum, rAcum, rProm, rPct };
-  }), [categories, currentFyId, order, valMonth, valAccum, ventasMonthCur, ventasAccumCur,
-       refAcumVal, refPromVal, refPctVal, metricActual, metricRef]);
+  }), [categories, currentFyId, order, cMonth, cAccum, valMonth, valAccum, ventasMonthCur, ventasAccumCur,
+       cRefAcum, cRefProm, refPctVal, metricActual, metricRef]);
 
   const visibleRows = useMemo(()=> rows.filter(r=>{
     if(search && !r.cat.name.toLowerCase().includes(search.toLowerCase())) return false;
@@ -1763,7 +1873,7 @@ function Dashboard({ session, role, onLogout }) {
   const refName   = fiscalYears.find(f=>f.id===refFyId)?.name || "";
 
   const METRIC_LABEL = { mes:"Mes actual", acum:"Acumulado", prom:"Promedio", pctMes:"% s/ventas (mes)", pctAcum:"% s/ventas (acum)", pct:"% s/ventas" };
-  const fmtMetric = (v, isPct)=> v==null ? "—" : (isPct ? pct(v) : money(v));
+  const fmtMetric = (v, isPct)=> v==null ? "—" : (isPct ? pct(v) : moneyCur(v, usd));
 
   /* ----- Datos para Gráficos / Análisis ----- */
   // Línea de tiempo: referencia (25/26) y luego actual (26/27), cronológico
@@ -1781,11 +1891,14 @@ function Dashboard({ session, role, onLogout }) {
     return out;
   }, [fiscalYears, refFyId, currentFyId, months]);
 
-  // Valor mensual de una serie: referencia usa lo cargado a mano; actual usa fórmula
+  // Valor mensual de una serie: referencia usa lo cargado a mano; actual usa fórmula (en la moneda elegida)
   const seriesMonth = useCallback((fy, name, ord)=>{
-    if(fy.id===refFyId){ const id=byName[name]?.id; return id?catMonth(fy.id,id,ord):0; }
-    return valMonth(fy.id, name, ord);
-  }, [refFyId, byName, catMonth, valMonth]);
+    let p;
+    if(fy.id===refFyId){ const id=byName[name]?.id; p = id?catMonth(fy.id,id,ord):0; }
+    else p = valMonth(fy.id, name, ord);
+    if(!usd) return p;
+    const k = invRate(fy.id, ord); return k!=null ? p*k : null;
+  }, [refFyId, byName, catMonth, valMonth, usd, invRate]);
 
   const hasData = useCallback((fy, ord)=>{
     const mid = months.find(m=>m.fiscal_year_id===fy.id && m.order_index===ord)?.id;
@@ -1796,8 +1909,9 @@ function Dashboard({ session, role, onLogout }) {
 
   const H = {
     categories, months, fiscalYears, currentFyId, refFyId, order, byName,
-    catMonth, valMonth, valAccum, refAcumVal, refPctVal,
+    catMonth, valMonth, valAccum, cMonth, cAccum, cRefAcum, refAcumVal, refPctVal,
     timeline, seriesMonth, hasData, monthsCur, fyName, refName,
+    currency, usd, setCurrency, avgRate,
   };
 
   /* ----- Exportar a Excel ----- */
@@ -1952,6 +2066,13 @@ function Dashboard({ session, role, onLogout }) {
             <input className="input-base" style={{minWidth:150}} placeholder="Nombre…"
               value={search} onChange={e=>setSearch(e.target.value)} />
           </div>
+          <div className="field">
+            <label>Moneda</label>
+            <div className="seg">
+              <button className={"seg-btn"+(!usd?" on":"")} onClick={()=>setCurrency("ars")}>Pesos</button>
+              <button className={"seg-btn"+(usd?" on":"")} onClick={()=>setCurrency("usd")}>Dólares</button>
+            </div>
+          </div>
           <div className="spacer"></div>
           {canEditSubs &&
             <button className="btn" onClick={()=>setView("ref")}>✎ Referencia {refName}</button>}
@@ -1961,13 +2082,13 @@ function Dashboard({ session, role, onLogout }) {
         {/* KPI cards (acumulado vs referencia) */}
         <div className="kpis">
           <KpiCard label="Total Ventas · acum." accent="var(--t-ingreso)" value={kpiVentas.acum}
-            refVal={kpiVentas.rAcum} type="ingreso" />
+            refVal={kpiVentas.rAcum} type="ingreso" usd={usd} />
           <KpiCard label="Utilidad Bruta · acum." accent="var(--navy)" value={kpiBruta.acum}
-            refVal={kpiBruta.rAcum} type="resultado" />
+            refVal={kpiBruta.rAcum} type="resultado" usd={usd} />
           <KpiCard label="Utilidad Neta · acum." accent="var(--teal)" value={kpiNeta.acum}
-            refVal={kpiNeta.rAcum} type="resultado" />
+            refVal={kpiNeta.rAcum} type="resultado" usd={usd} />
           <KpiCard label="Resultado desp. imp. · acum." accent="#7c3aed" value={kpiResult.acum}
-            refVal={kpiResult.rAcum} type="resultado" />
+            refVal={kpiResult.rAcum} type="resultado" usd={usd} />
         </div>
 
         {/* Tabla simplificada */}
@@ -2006,7 +2127,7 @@ function Dashboard({ session, role, onLogout }) {
                       <td className={"num diff "+diffClass}>
                         {!r.comparable ? "—"
                           : r.difVal==null ? "—"
-                          : (r.difVal>0?"+":"")+(r.actualIsPct ? pct(r.difVal) : money(r.difVal))}
+                          : (r.difVal>0?"+":"")+(r.actualIsPct ? pct(r.difVal) : moneyCur(r.difVal, usd))}
                       </td>
                       <td className={"num diff "+diffClass}>
                         {r.difPct!=null ? (r.difPct>0?"+":"")+pct(r.difPct) : "—"}
@@ -2060,14 +2181,14 @@ function Dashboard({ session, role, onLogout }) {
 }
 
 /* KPI card */
-function KpiCard({label, accent, value, refVal, type}){
+function KpiCard({label, accent, value, refVal, type, usd}){
   const diff = (value??0) - (refVal??0);
   const fav = goodIfUp(type) ? diff>=0 : diff<=0;
   const pctv = refVal ? (diff/Math.abs(refVal))*100 : null;
   return (
     <div className="kpi" style={{"--accent":accent}}>
       <div className="k-label">{label}</div>
-      <div className="k-val num">{money(value)}</div>
+      <div className="k-val num">{moneyCur(value, usd)}</div>
       <div className="k-sub">
         {pctv!=null
           ? <span className={"delta "+(fav?"pos":"neg")}>{diff>=0?"▲":"▼"} {pct(Math.abs(pctv))}</span>
