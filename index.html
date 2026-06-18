@@ -110,6 +110,13 @@
   tbody tr:hover{background:#f9fbfd}
   tbody tr.calc{background:#f4f7fb}
   tbody tr.calc:hover{background:#eef3f9}
+  /* Filas resaltadas (subtotales y resultados) */
+  tbody tr.hi-sub td{background:#eaf1fb}
+  tbody tr.hi-sub:hover td{background:#e2ecf8}
+  tbody tr.hi-key td{background:#d8e6f7;font-weight:700}
+  tbody tr.hi-key:hover td{background:#cfe0f3}
+  .grid-table tr.grid-cat-row.hi-sub td,.grid-table tr.grid-cat-row.hi-sub .sticky-col{background:#eaf1fb}
+  .grid-table tr.grid-cat-row.hi-key td,.grid-table tr.grid-cat-row.hi-key .sticky-col{background:#d8e6f7;font-weight:700}
   .cat-cell{display:flex;align-items:center;gap:10px}
   .type-bar{width:3px;height:18px;border-radius:2px;flex:none}
   .cat-name{font-weight:600}
@@ -279,6 +286,37 @@ const pct = (n) => (n == null || isNaN(n) || !isFinite(n)) ? "—" :
 const TYPE_COLOR = { ingreso:"var(--t-ingreso)", egreso:"var(--t-egreso)", impuesto:"var(--t-impuesto)", resultado:"var(--t-resultado)" };
 // ¿Un aumento es favorable? ingreso/resultado -> sí (verde). egreso/impuesto -> no (rojo)
 const goodIfUp = (type) => type === "ingreso" || type === "resultado";
+
+/* ---- Categorías calculadas (subtotales y resultados) ---- */
+const SUB3_PARTS = ["Sueldo y Cargas Sociales","Gastos de Personal","Honorarios","Impuestos",
+  "Gastos Bancarios","Intereses pagados","Gastos de oficina","Servicios","Sistemas",
+  "Viajes y Viáticos","Marketing","Gastos de Bienes de Uso","Otros gastos operativos"];
+const TAX_PARTS = ["Impuestos a las ganancias","Percepción Ganancia aduana","Anticipo Impuesto a las ganancias",
+  "Imp. créditos y débitos","Percepción Ganancias","Retención Impuestos a las ganancias"];
+const FORMULAS = {
+  "Subtotal 1": M => M("Costo de Mercadería Vendida")+M("Costo de Mercadería Vendida Indirecta")+M("Gastos de Ingeniería")+M("Gastos de comercialización"),
+  "Utilidad Bruta": M => M("Total de Ventas")-M("Subtotal 1"),
+  "Subtotal 2": M => M("Total de otros ingresos")+M("Total Resultado por Tenencia"),
+  "Subtotal 3": M => SUB3_PARTS.reduce((t,n)=>t+M(n),0),
+  "Total de Utilidad Neta": M => M("Utilidad Bruta")+M("Subtotal 2")-M("Subtotal 3"),
+  "Total de Impuestos a las ganancias": M => TAX_PARTS.reduce((t,n)=>t+M(n),0),
+  "Resultado después del impuesto": M => M("Total de Utilidad Neta")+M("Total de Impuestos a las ganancias"),
+};
+const isCalcName = (name)=> Object.prototype.hasOwnProperty.call(FORMULAS, name);
+// Filas a resaltar: "key" = resultado fuerte, "sub" = subtotal
+const HILITE = {
+  "Total de Ventas":"hi-key","Subtotal 1":"hi-sub","Utilidad Bruta":"hi-key",
+  "Subtotal 2":"hi-sub","Subtotal 3":"hi-sub","Total de Utilidad Neta":"hi-key",
+  "Total de Impuestos a las ganancias":"hi-sub","Resultado después del impuesto":"hi-key",
+};
+// Evaluar un valor por nombre con un getter de hojas (memo opcional)
+function evalByName(name, getLeaf, memo){
+  if(memo && name in memo) return memo[name];
+  const f = FORMULAS[name];
+  const v = f ? f(n=>evalByName(n, getLeaf, memo)) : (getLeaf(name)||0);
+  if(memo) memo[name]=v;
+  return v;
+}
 
 /* Input con formato: muestra $/% cuando no está enfocado, número crudo al editar.
    El valor que sube por onChange siempre es un string numérico plano (punto decimal). */
@@ -618,12 +656,19 @@ function ReferenceView({ categories, fiscalYearId, refName, referenceValues, can
   const [data, setData] = useState(init);
   const [busy, setBusy] = useState(false);
   const setField = (catId, key, val)=> setData(d=>({ ...d, [catId]:{ ...d[catId], [key]:val } }));
-  const fillAvg = (catId)=>{ const a=parseFloat(data[catId].accumulated); if(!isNaN(a)) setField(catId,"average",String(+(a/12).toFixed(2))); };
+
+  // Mapa nombre->categoría y valores calculados desde las hojas cargadas
+  const byNameR = {}; categories.forEach(c=>{ byNameR[c.name]=c; });
+  const leafNum = (field)=> (name)=>{ const c=byNameR[name]; return c?(parseFloat(data[c.id]?.[field])||0):0; };
+  const refAcumOf = (name)=> evalByName(name, leafNum("accumulated"), {});
+  const refPromOf = (name)=> evalByName(name, leafNum("average"), {});
+  const ventasAcumR = refAcumOf("Total de Ventas");
 
   const save = async ()=>{
     setBusy(true);
     const rows=[];
     categories.forEach(c=>{
+      if(isCalcName(c.name)) return; // las calculadas no se cargan
       const d=data[c.id];
       const any = d.accumulated!=="" || d.average!=="" || d.pct_sales!=="";
       if(any){
@@ -664,31 +709,53 @@ function ReferenceView({ categories, fiscalYearId, refName, referenceValues, can
               </tr>
             </thead>
             <tbody>
-              {categories.map(c=>(
-                <tr key={c.id} className={c.is_calculated?"calc":""}>
-                  <td className="left">
-                    <div className="cat-cell">
-                      <span className="type-bar" style={{background:TYPE_COLOR[c.type]}}></span>
-                      <span className={"cat-name"+(c.is_calculated?" strong":"")}>{c.name}</span>
-                    </div>
-                  </td>
-                  <td className="num">
-                    <FmtInput className="cell num wide" kind="money" disabled={!canEdit}
-                      value={data[c.id].accumulated} placeholder="$ 0,00"
-                      onChange={v=>setField(c.id,"accumulated",v)} />
-                  </td>
-                  <td className="num">
-                    <FmtInput className="cell num wide" kind="money" disabled={!canEdit}
-                      value={data[c.id].average} placeholder="$ 0,00"
-                      onChange={v=>setField(c.id,"average",v)} />
-                  </td>
-                  <td className="num">
-                    <FmtInput className="cell num" kind="pct" disabled={!canEdit}
-                      value={data[c.id].pct_sales} placeholder="0,00%"
-                      onChange={v=>setField(c.id,"pct_sales",v)} />
-                  </td>
-                </tr>
-              ))}
+              {categories.map(c=>{
+                const calc = isCalcName(c.name);
+                const hi = HILITE[c.name];
+                if(calc){
+                  const acc = refAcumOf(c.name), prom = refPromOf(c.name);
+                  const pc = ventasAcumR!==0 ? (acc/ventasAcumR)*100 : null;
+                  return (
+                    <tr key={c.id} className={hi||"calc"}>
+                      <td className="left">
+                        <div className="cat-cell">
+                          <span className="type-bar" style={{background:TYPE_COLOR[c.type]}}></span>
+                          <span className={"cat-name"+(hi==="hi-key"?" strong":"")}>{c.name}</span>
+                          <span className="badge">calc</span>
+                        </div>
+                      </td>
+                      <td className="num">{money(acc)}</td>
+                      <td className="num">{money(prom)}</td>
+                      <td className="num pct">{pct(pc)}</td>
+                    </tr>
+                  );
+                }
+                return (
+                  <tr key={c.id} className={hi||""}>
+                    <td className="left">
+                      <div className="cat-cell">
+                        <span className="type-bar" style={{background:TYPE_COLOR[c.type]}}></span>
+                        <span className="cat-name">{c.name}</span>
+                      </div>
+                    </td>
+                    <td className="num">
+                      <FmtInput className="cell num wide" kind="money" disabled={!canEdit}
+                        value={data[c.id].accumulated} placeholder="$ 0,00"
+                        onChange={v=>setField(c.id,"accumulated",v)} />
+                    </td>
+                    <td className="num">
+                      <FmtInput className="cell num wide" kind="money" disabled={!canEdit}
+                        value={data[c.id].average} placeholder="$ 0,00"
+                        onChange={v=>setField(c.id,"average",v)} />
+                    </td>
+                    <td className="num">
+                      <FmtInput className="cell num" kind="pct" disabled={!canEdit}
+                        value={data[c.id].pct_sales} placeholder="0,00%"
+                        onChange={v=>setField(c.id,"pct_sales",v)} />
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -742,6 +809,11 @@ function GridView({ categories, subcategories, months, values, currentFyId, fisc
     return t;
   };
 
+  // Total con fórmulas: hojas usan lo cargado; calculadas aplican fórmula (en vivo)
+  const byNameG = {}; categories.forEach(c=>{ byNameG[c.name]=c; });
+  const valTotal = (name, mId)=> evalByName(name, (n)=>{ const c=byNameG[n]; return c?catTotal(c.id,mId):0; }, {});
+  const isCalc = (cat)=> isCalcName(cat.name);
+
   const addSub = async (cat)=>{
     const name = prompt(`Nueva subcategoría para "${cat.name}":`);
     if(!name || !name.trim()) return;
@@ -785,14 +857,14 @@ function GridView({ categories, subcategories, months, values, currentFyId, fisc
   const fyName = fiscalYears.find(f=>f.id===currentFyId)?.name || "";
 
   // Columnas de resumen (calculadas en vivo desde las celdas)
-  const ventasId = categories.find(c=>c.name==="Total de Ventas")?.id;
   const subAccum = (cId,sId)=>{ let t=0; monthsCur.forEach(m=>{const v=parseFloat(cells[keyOf(m.id,cId,sId)]); if(!isNaN(v)) t+=v;}); return t; };
-  const catAccumG = (cId)=>{ let t=0; monthsCur.forEach(m=> t+=catTotal(cId,m.id)); return t; };
+  const valAccumName = (name)=> monthsCur.reduce((t,m)=> t+valTotal(name,m.id), 0);
   const catMonthsLoaded = (cId)=> monthsCur.filter(m=>{
     if(catSubs(cId).some(s=>{const v=cells[keyOf(m.id,cId,s.id)]; return v!=null && v!=="";})) return true;
     const d=cells[keyOf(m.id,cId,"")]; return d!=null && d!=="";
   }).length;
-  const ventasAccumG = ventasId ? catAccumG(ventasId) : 0;
+  const globalMonthsLoaded = monthsCur.filter(m=> categories.some(c=> catTotal(c.id,m.id)!==0)).length;
+  const ventasAccumG = valAccumName("Total de Ventas");
 
   return (
     <div>
@@ -829,32 +901,37 @@ function GridView({ categories, subcategories, months, values, currentFyId, fisc
               {categories.map(cat=>{
                 const subs = catSubs(cat.id);
                 const hasSubs = subs.length>0;
+                const calc = isCalc(cat);
+                const acum = valAccumName(cat.name);
+                const mLoaded = calc ? globalMonthsLoaded : catMonthsLoaded(cat.id);
+                const hi = HILITE[cat.name];
                 return (
                   <React.Fragment key={cat.id}>
-                    <tr className="grid-cat-row">
+                    <tr className={"grid-cat-row"+(hi?" "+hi:"")}>
                       <td className="left sticky-col">
                         <div className="cat-cell">
                           <span className="type-bar" style={{background:TYPE_COLOR[cat.type]}}></span>
-                          <span className="cat-name">{cat.name}</span>
-                          {canEditSubs &&
+                          <span className={"cat-name"+(hi==="hi-key"?" strong":"")}>{cat.name}</span>
+                          {calc && <span className="badge">calc</span>}
+                          {!calc && canEditSubs &&
                             <button className="mini-add" title="Agregar subcategoría"
                               onClick={()=>addSub(cat)}>+ sub</button>}
                         </div>
                       </td>
                       {monthsCur.map(m=>(
                         <td key={m.id} className="num">
-                          {hasSubs
-                            ? <span className="cat-total">{money(catTotal(cat.id,m.id))}</span>
+                          {(calc || hasSubs)
+                            ? <span className="cat-total">{money(calc?valTotal(cat.name,m.id):catTotal(cat.id,m.id))}</span>
                             : <FmtInput className="cell num" kind="money" disabled={!canEditValues}
                                 placeholder="$ 0,00" value={cells[keyOf(m.id,cat.id,"")]??""}
                                 onChange={v=>setCell(keyOf(m.id,cat.id,""),v)} />}
                         </td>
                       ))}
-                      <td className="num grid-sum">{money(catAccumG(cat.id))}</td>
-                      <td className="num grid-sum">{money(catMonthsLoaded(cat.id)>0?catAccumG(cat.id)/catMonthsLoaded(cat.id):0)}</td>
-                      <td className="num grid-sum pct">{pct(ventasAccumG!==0?(catAccumG(cat.id)/ventasAccumG)*100:null)}</td>
+                      <td className="num grid-sum">{money(acum)}</td>
+                      <td className="num grid-sum">{money(mLoaded>0?acum/mLoaded:0)}</td>
+                      <td className="num grid-sum pct">{pct(ventasAccumG!==0?(acum/ventasAccumG)*100:null)}</td>
                     </tr>
-                    {subs.map(s=>(
+                    {!calc && subs.map(s=>(
                       <tr className="grid-sub-row" key={s.id}>
                         <td className="left sticky-col"><span className="sub-name">↳ {s.name}</span></td>
                         {monthsCur.map(m=>(
@@ -1081,7 +1158,10 @@ function Dashboard({ session, role, onLogout }) {
   const [openCat, setOpenCat] = useState(null);
   const [refEditor, setRefEditor] = useState(false);
   const [view, setView]       = useState("home");
-  const [compareMode, setCompareMode] = useState("acum");
+  const [metricActual, setMetricActual] = useState("acum");   // mes|acum|prom|pctMes|pctAcum
+  const [metricRef, setMetricRef]       = useState("acum");   // acum|prom|pct
+  const [rowFilter, setRowFilter]       = useState("all");    // all|key|ingreso|egreso|impuesto
+  const [search, setSearch]             = useState("");
   const [toast, setToast]     = useState("");
 
   const canEditValues = role==="admin" || role==="carga";
@@ -1144,45 +1224,71 @@ function Dashboard({ session, role, onLogout }) {
     let t=0; for(let o=1;o<=ord;o++) t += catMonth(fyId,catId,o); return t;
   }, [catMonth]);
 
-  const ventasId = useMemo(()=>categories.find(c=>c.name==="Total de Ventas")?.id, [categories]);
+  const byName = useMemo(()=>{ const m={}; categories.forEach(c=>m[c.name]=c); return m; }, [categories]);
+  const nameId = useCallback((name)=> byName[name]?.id, [byName]);
 
-  const ventasMonthCur = ventasId ? catMonth(currentFyId, ventasId, order) : 0;
-  const ventasAccumCur = ventasId ? catAccum(currentFyId, ventasId, order) : 0;
+  // Valores con fórmulas (leaf = dato cargado; calculadas = fórmula)
+  const valMonth = useCallback((fyId, name, ord)=>{
+    return evalByName(name, (n)=>{ const id=byName[n]?.id; return id?catMonth(fyId,id,ord):0; }, {});
+  }, [byName, catMonth]);
+  const valAccum = useCallback((fyId, name, ord)=>{
+    return evalByName(name, (n)=>{ const id=byName[n]?.id; return id?catAccum(fyId,id,ord):0; }, {});
+  }, [byName, catAccum]);
 
-  // Referencia fija por categoría (acumulado, promedio, % s/ventas) del ejercicio de referencia
+  const ventasMonthCur = valMonth(currentFyId, "Total de Ventas", order);
+  const ventasAccumCur = valAccum(currentFyId, "Total de Ventas", order);
+
+  // Referencia fija por categoría (acumulado, promedio, % s/ventas)
   const refMap = useMemo(()=>{
     const m={};
     for(const r of referenceValues){ if(r.fiscal_year_id===refFyId) m[r.category_id]=r; }
     return m;
   }, [referenceValues, refFyId]);
 
-  /* ----- Filas de la tabla ----- */
-  const rows = useMemo(()=> categories.map(cat=>{
-    const mes   = catMonth(currentFyId, cat.id, order);
-    const acum  = catAccum(currentFyId, cat.id, order);
-    const prom  = order>0 ? acum/order : 0;
-    const ref   = refMap[cat.id] || {};
-    const refAcum = Number(ref.accumulated||0);
-    const refProm = Number(ref.average||0);
-    const refPct  = ref.pct_sales!=null ? Number(ref.pct_sales) : null;
-    const pctVtaMes  = ventasMonthCur!==0 ? (mes/ventasMonthCur)*100 : null;
-    const pctVtaAcum = ventasAccumCur!==0 ? (acum/ventasAccumCur)*100 : null;
+  const refAcumVal = useCallback((name)=> evalByName(name, (n)=>{ const id=byName[n]?.id; const r=id?refMap[id]:null; return r?Number(r.accumulated||0):0; }, {}), [byName, refMap]);
+  const refPromVal = useCallback((name)=> evalByName(name, (n)=>{ const id=byName[n]?.id; const r=id?refMap[id]:null; return r?Number(r.average||0):0; }, {}), [byName, refMap]);
+  const refVentasAcum = refAcumVal("Total de Ventas");
+  const refPctVal = useCallback((name)=>{
+    if(isCalcName(name)) return refVentasAcum!==0 ? (refAcumVal(name)/refVentasAcum)*100 : null;
+    const id=byName[name]?.id; const r=id?refMap[id]:null;
+    if(r && r.pct_sales!=null) return Number(r.pct_sales);
+    return refVentasAcum!==0 ? (refAcumVal(name)/refVentasAcum)*100 : null;
+  }, [byName, refMap, refAcumVal, refVentasAcum]);
 
-    // Diferencias según el modo de comparación
-    let difVal=null, difPct=null, difIsPoints=false;
-    if(compareMode==="acum"){              // Acumulado actual vs Acum. referencia
-      difVal = acum - refAcum;
-      difPct = refAcum!==0 ? (difVal/Math.abs(refAcum))*100 : null;
-    } else if(compareMode==="mes"){        // Mes actual vs Promedio referencia
-      difVal = mes - refProm;
-      difPct = refProm!==0 ? (difVal/Math.abs(refProm))*100 : null;
-    } else if(compareMode==="pct"){        // % s/ventas acum actual vs % referencia (en puntos)
-      difIsPoints = true;
-      difVal = (pctVtaAcum!=null && refPct!=null) ? (pctVtaAcum - refPct) : null;
+  const unitOf = (metric)=> (metric==="pctMes"||metric==="pctAcum"||metric==="pct") ? "pct" : "money";
+
+  /* ----- Filas (según métricas elegidas) ----- */
+  const rows = useMemo(()=> categories.map(cat=>{
+    const name = cat.name;
+    const mes  = valMonth(currentFyId, name, order);
+    const acum = valAccum(currentFyId, name, order);
+    const prom = order>0 ? acum/order : 0;
+    const pctMes  = ventasMonthCur!==0 ? (mes/ventasMonthCur)*100 : null;
+    const pctAcum = ventasAccumCur!==0 ? (acum/ventasAccumCur)*100 : null;
+    const rAcum = refAcumVal(name), rProm = refPromVal(name), rPct = refPctVal(name);
+
+    const actualVal = metricActual==="mes"?mes : metricActual==="acum"?acum :
+                      metricActual==="prom"?prom : metricActual==="pctMes"?pctMes : pctAcum;
+    const refVal    = metricRef==="acum"?rAcum : metricRef==="prom"?rProm : rPct;
+
+    const comparable = unitOf(metricActual)===unitOf(metricRef);
+    let difVal=null, difPct=null;
+    if(comparable && actualVal!=null && refVal!=null){
+      difVal = actualVal - refVal;
+      if(unitOf(metricActual)==="money") difPct = refVal!==0 ? (difVal/Math.abs(refVal))*100 : null;
     }
-    return { cat, mes, acum, prom, refAcum, refProm, refPct, pctVtaMes, pctVtaAcum,
-             difVal, difPct, difIsPoints };
-  }), [categories, currentFyId, order, catMonth, catAccum, refMap, ventasMonthCur, ventasAccumCur, compareMode]);
+    return { cat, actualVal, refVal, difVal, difPct, comparable,
+             actualIsPct:unitOf(metricActual)==="pct", refIsPct:unitOf(metricRef)==="pct",
+             mes, acum, prom, pctMes, pctAcum, rAcum, rProm, rPct };
+  }), [categories, currentFyId, order, valMonth, valAccum, ventasMonthCur, ventasAccumCur,
+       refAcumVal, refPromVal, refPctVal, metricActual, metricRef]);
+
+  const visibleRows = useMemo(()=> rows.filter(r=>{
+    if(search && !r.cat.name.toLowerCase().includes(search.toLowerCase())) return false;
+    if(rowFilter==="all") return true;
+    if(rowFilter==="key") return !!HILITE[r.cat.name];
+    return r.cat.type===rowFilter;
+  }), [rows, rowFilter, search]);
 
   const kpiFor = (name) => rows.find(r=>r.cat.name===name) || {};
   const kpiVentas = kpiFor("Total de Ventas");
@@ -1195,24 +1301,21 @@ function Dashboard({ session, role, onLogout }) {
   const fyName    = fiscalYears.find(f=>f.id===currentFyId)?.name || "";
   const refName   = fiscalYears.find(f=>f.id===refFyId)?.name || "";
 
+  const METRIC_LABEL = { mes:"Mes actual", acum:"Acumulado", prom:"Promedio", pctMes:"% s/ventas (mes)", pctAcum:"% s/ventas (acum)", pct:"% s/ventas" };
+  const fmtMetric = (v, isPct)=> v==null ? "—" : (isPct ? pct(v) : money(v));
+
   /* ----- Exportar a Excel ----- */
   const exportXlsx = () => {
-    const data = rows.map(r=>({
+    const data = visibleRows.map(r=>({
       "Categoría": r.cat.name,
-      "Mes actual": r.mes,
-      "% s/ventas mes": r.pctVtaMes!=null? +r.pctVtaMes.toFixed(1):null,
-      "Acumulado": r.acum,
-      "% s/ventas acum": r.pctVtaAcum!=null? +r.pctVtaAcum.toFixed(1):null,
-      "Promedio mensual": +r.prom.toFixed(2),
-      "Acum. referencia": r.refAcum,
-      "Prom. referencia": r.refProm,
-      "% referencia": r.refPct,
-      "Diferencia $ (acum)": r.acum - r.refAcum,
-      "Diferencia % (acum)": r.refAcum!==0 ? +(((r.acum-r.refAcum)/Math.abs(r.refAcum))*100).toFixed(1) : null,
+      [METRIC_LABEL[metricActual]]: r.actualVal!=null ? +r.actualVal.toFixed(2) : null,
+      ["Ref · "+METRIC_LABEL[metricRef]]: r.refVal!=null ? +r.refVal.toFixed(2) : null,
+      "Diferencia": (r.comparable && r.difVal!=null) ? +r.difVal.toFixed(2) : null,
+      "Diferencia %": r.difPct!=null ? +r.difPct.toFixed(2) : null,
     }));
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Comparativo");
+    XLSX.utils.book_append_sheet(wb, ws, "Comparacion");
     XLSX.writeFile(wb, `DEAM_${fyName.replace("/","-")}_${curMonth?.month_name||""}.xlsx`);
   };
 
@@ -1288,7 +1391,7 @@ function Dashboard({ session, role, onLogout }) {
             <p className="section-sub">Compará el mes, el promedio o el % del ejercicio actual contra la referencia.</p>
           </div>
         </div>
-        {/* Controles */}
+        {/* Controles + filtros */}
         <div className="controls">
           <div className="field">
             <label>Ejercicio actual</label>
@@ -1297,7 +1400,7 @@ function Dashboard({ session, role, onLogout }) {
             </select>
           </div>
           <div className="field">
-            <label>Ejercicio de referencia</label>
+            <label>Referencia</label>
             <select value={refFyId||""} onChange={e=>setRefFyId(e.target.value)}>
               {fiscalYears.map(f=><option key={f.id} value={f.id}>{f.name}</option>)}
             </select>
@@ -1309,93 +1412,102 @@ function Dashboard({ session, role, onLogout }) {
             </select>
           </div>
           <div className="field">
-            <label>Comparar</label>
-            <select value={compareMode} onChange={e=>setCompareMode(e.target.value)}>
-              <option value="acum">Acumulado vs Acum. ref.</option>
-              <option value="mes">Mes actual vs Prom. ref.</option>
-              <option value="pct">% s/ventas vs % ref.</option>
+            <label>Métrica actual</label>
+            <select value={metricActual} onChange={e=>setMetricActual(e.target.value)}>
+              <option value="mes">Mes</option>
+              <option value="acum">Acumulado</option>
+              <option value="prom">Promedio mensual</option>
+              <option value="pctMes">% s/ventas (mes)</option>
+              <option value="pctAcum">% s/ventas (acum)</option>
             </select>
+          </div>
+          <div className="field">
+            <label>Métrica referencia</label>
+            <select value={metricRef} onChange={e=>setMetricRef(e.target.value)}>
+              <option value="acum">Acumulado</option>
+              <option value="prom">Promedio</option>
+              <option value="pct">% s/ventas</option>
+            </select>
+          </div>
+          <div className="field">
+            <label>Mostrar</label>
+            <select value={rowFilter} onChange={e=>setRowFilter(e.target.value)}>
+              <option value="all">Todas las categorías</option>
+              <option value="key">Solo subtotales y resultados</option>
+              <option value="ingreso">Ingresos</option>
+              <option value="egreso">Egresos / gastos</option>
+              <option value="impuesto">Impuestos</option>
+            </select>
+          </div>
+          <div className="field">
+            <label>Buscar</label>
+            <input className="input-base" style={{minWidth:150}} placeholder="Nombre…"
+              value={search} onChange={e=>setSearch(e.target.value)} />
           </div>
           <div className="spacer"></div>
           {canEditSubs &&
-            <button className="btn" onClick={()=>setView("ref")}>✎ Editar referencia {refName}</button>}
-          <button className="btn btn-teal" onClick={exportXlsx}>⬇ Exportar a Excel</button>
+            <button className="btn" onClick={()=>setView("ref")}>✎ Referencia {refName}</button>}
+          <button className="btn btn-teal" onClick={exportXlsx}>⬇ Excel</button>
         </div>
 
         {/* KPI cards (acumulado vs referencia) */}
         <div className="kpis">
           <KpiCard label="Total Ventas · acum." accent="var(--t-ingreso)" value={kpiVentas.acum}
-            refVal={kpiVentas.refAcum} type="ingreso" />
+            refVal={kpiVentas.rAcum} type="ingreso" />
           <KpiCard label="Utilidad Bruta · acum." accent="var(--navy)" value={kpiBruta.acum}
-            refVal={kpiBruta.refAcum} type="resultado" />
+            refVal={kpiBruta.rAcum} type="resultado" />
           <KpiCard label="Utilidad Neta · acum." accent="var(--teal)" value={kpiNeta.acum}
-            refVal={kpiNeta.refAcum} type="resultado" />
+            refVal={kpiNeta.rAcum} type="resultado" />
           <KpiCard label="Resultado desp. imp. · acum." accent="#7c3aed" value={kpiResult.acum}
-            refVal={kpiResult.refAcum} type="resultado" />
+            refVal={kpiResult.rAcum} type="resultado" />
         </div>
 
-        {/* Tabla principal */}
+        {/* Tabla simplificada */}
         <div className="panel">
           <div className="panel-head">
-            <h2>Comparativo por categoría</h2>
-            <span className="hint">{curMonth?.month_name} {curMonth?.calendar_year} · {fyName} vs {refName}</span>
+            <h2>{METRIC_LABEL[metricActual]} ({fyName}) vs {METRIC_LABEL[metricRef]} ({refName})</h2>
+            <span className="hint">{(metricActual==="mes"||metricActual==="pctMes") ? `${curMonth?.month_name} ${curMonth?.calendar_year}` : "Acumulado a "+(curMonth?.month_name||"")}</span>
           </div>
           <div className="table-scroll">
             <table>
               <thead>
                 <tr>
                   <th className="left">Categoría</th>
-                  <th>Mes actual</th>
-                  <th>% s/vtas mes</th>
-                  <th>Acumulado</th>
-                  <th>% s/vtas acum</th>
-                  <th>Prom. mensual</th>
-                  <th>Acum. ref.</th>
-                  <th>Prom. ref.</th>
-                  <th>% ref.</th>
-                  <th>{compareMode==="acum"?"Dif. $ (acum)":compareMode==="mes"?"Dif. $ (mes vs prom)":"Dif. p.p. (%)"}</th>
-                  <th>{compareMode==="pct"?"":"Dif. %"}</th>
-                  <th></th>
+                  <th>{METRIC_LABEL[metricActual]}</th>
+                  <th>Ref · {METRIC_LABEL[metricRef]}</th>
+                  <th>Diferencia</th>
+                  <th>Dif. %</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map(r=>{
+                {visibleRows.map(r=>{
                   const fav = goodIfUp(r.cat.type) ? (r.difVal??0)>=0 : (r.difVal??0)<=0;
                   const diffClass = (r.difVal==null||r.difVal===0) ? "" : (fav?"pos":"neg");
+                  const hi = HILITE[r.cat.name];
                   return (
-                    <tr key={r.cat.id} className={r.cat.is_calculated?"calc":""}>
+                    <tr key={r.cat.id} className={hi||""}>
                       <td className="left">
                         <div className="cat-cell">
                           <span className="type-bar" style={{background:TYPE_COLOR[r.cat.type]}}></span>
-                          <span className={"cat-name"+(r.cat.is_calculated?" strong":"")}>{r.cat.name}</span>
+                          <span className={"cat-name"+(hi==="hi-key"?" strong":"")}>{r.cat.name}</span>
                           {r.cat.is_calculated && <span className="badge">calc</span>}
                         </div>
                       </td>
-                      <td className="num">{money(r.mes)}</td>
-                      <td className="num pct">{pct(r.pctVtaMes)}</td>
-                      <td className="num">{money(r.acum)}</td>
-                      <td className="num pct">{pct(r.pctVtaAcum)}</td>
-                      <td className="num pct">{money(r.prom)}</td>
-                      <td className="num">{money(r.refAcum)}</td>
-                      <td className="num pct">{money(r.refProm)}</td>
-                      <td className="num pct">{pct(r.refPct)}</td>
+                      <td className="num">{fmtMetric(r.actualVal, r.actualIsPct)}</td>
+                      <td className="num">{fmtMetric(r.refVal, r.refIsPct)}</td>
                       <td className={"num diff "+diffClass}>
-                        {r.difVal==null ? "—"
-                          : r.difIsPoints
-                            ? (r.difVal>0?"+":"")+pct(r.difVal)
-                            : (r.difVal>0?"+":"")+money(r.difVal)}
+                        {!r.comparable ? "—"
+                          : r.difVal==null ? "—"
+                          : (r.difVal>0?"+":"")+(r.actualIsPct ? pct(r.difVal) : money(r.difVal))}
                       </td>
                       <td className={"num diff "+diffClass}>
-                        {compareMode==="pct" ? ""
-                          : (r.difPct!=null ? (r.difPct>0?"+":"")+pct(r.difPct) : "—")}
-                      </td>
-                      <td>
-                        <button className="link-btn" onClick={()=>setOpenCat(r.cat)}>
-                          {canEditSubs?"Editar":"Ver"} detalle</button>
+                        {r.difPct!=null ? (r.difPct>0?"+":"")+pct(r.difPct) : "—"}
                       </td>
                     </tr>
                   );
                 })}
+                {visibleRows.length===0 &&
+                  <tr><td colSpan="5" className="empty">No hay categorías que coincidan con el filtro.</td></tr>}
               </tbody>
             </table>
           </div>
