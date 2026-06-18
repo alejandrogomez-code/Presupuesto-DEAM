@@ -1366,15 +1366,17 @@ function AnalysisView({ H, onBack }){
     return share>0 ? cAccum(currentFyId,name,lastOrd)/share : projLinear(name);
   };
   const projTrend = (name)=>{
-    // Tendencia robusta: ritmo de los últimos meses cargados anualizado
+    // Tendencia: promedio de los últimos meses con más peso a los más recientes, anualizado
     const loaded = monthsCur
       .filter(m=> m.order_index<=lastOrd && curFy && H.hasData(curFy, m.order_index))
       .map(m=>m.order_index).sort((a,b)=>a-b);
     if(loaded.length===0) return projLinear(name);
-    const recent = loaded.slice(-3); // últimos 3 meses con datos
-    const recentAvg = recent.reduce((s,o)=> s + cMonth(currentFyId,name,o), 0) / recent.length;
+    const recent = loaded.slice(-4); // últimos hasta 4 meses con datos
+    let wsum=0, vsum=0;
+    recent.forEach((o,i)=>{ const w=i+1; wsum+=w; vsum += w * cMonth(currentFyId,name,o); }); // peso 1..n, más reciente = mayor
+    const wAvg = wsum>0 ? vsum/wsum : 0;
     const acum = cAccum(currentFyId, name, lastOrd);
-    return acum + recentAvg * (12 - lastOrd);
+    return acum + wAvg * (12 - lastOrd);
   };
   const projBy = (name)=> method==="estacional"?projSeasonal(name) : method==="tendencia"?projTrend(name) : projLinear(name);
   const METHOD_LABEL = { lineal:"Lineal (run-rate)", estacional:"Estacional (ventas ref.)", tendencia:"Tendencia (meses recientes)" };
@@ -1496,7 +1498,7 @@ function AnalysisView({ H, onBack }){
           {method==="estacional" && (hasSeasonal
             ? "Cada categoría usa su patrón mensual del ejercicio anterior (o el de ventas si no tiene propio)."
             : "Inactivo: cargá las ventas mensuales 2025/2026 en Configuración para activar la estacionalidad (por ahora = lineal).")}
-          {method==="tendencia" && "Anualiza el ritmo de los últimos meses cargados (acumulado + promedio reciente × meses restantes)."}
+          {method==="tendencia" && "Promedio de los últimos meses con más peso a los más recientes, anualizado (capta si venís acelerando o frenando)."}
         </span>
       </div>
 
@@ -1567,7 +1569,7 @@ function AnalysisView({ H, onBack }){
           </table>
         </div>
         <p style={{fontSize:11.5,color:"var(--muted)",margin:"10px 14px 0"}}>
-          Lineal: promedio × 12 · Estacional: según el peso de cada mes en las ventas de la referencia · Tendencia: ritmo de los últimos meses anualizado. La columna resaltada es el método activo.
+          Lineal: promedio × 12 · Estacional: según el peso de cada mes en las ventas de la referencia · Tendencia: últimos meses con más peso a los recientes, anualizado. La columna resaltada es el método activo.
         </p>
         {hasSeasonal && (()=>{
           const ws = [1,2,3,4,5,6,7,8,9,10,11,12].map(o=> (refW && refW[o]) ? refW[o]*100 : 0);
